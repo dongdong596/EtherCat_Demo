@@ -89,7 +89,11 @@ int main(void)
   MX_GPIO_Init();
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
+  uint8_t data[16];
 
+  ESC_ReadBlock(0x0000, data, 16);
+
+  __NOP();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -120,10 +124,11 @@ int main(void)
      * ============================================================ */
 
     /* ---- 选择测试: 取消注释下面其中一行 ---- */
-    ESC_TestReadID();             /* 测试1: 读取 ESC ID (推荐首选) */
+    // ESC_TestReadID();          /* 测试1: 读取 ESC ID */
     // ESC_TestReadWrite();       /* 测试2: 读写用户 RAM */
-    // SPI_LoopbackTest();        /* 测试3: 自环回 */
-    // SPI_SendTestPattern();     /* 测试4: 发送波形 */
+    ESC_Diagnose();               /* 测试3: 全诊断 */
+    // SPI_LoopbackTest();        /* 测试4: 自环回 */
+    // SPI_SendTestPattern();     /* 测试5: 发送波形 */
 
     HAL_Delay(500);               /* 500ms 延迟 */
   }

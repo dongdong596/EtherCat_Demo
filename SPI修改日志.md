@@ -93,22 +93,33 @@ static void ESC_EncodeAddress(uint16_t addr, uint8_t cmd,
 
 基于 AX58100 Datasheet Table 6-1/6-2 和 Beckhoff ESC SPI 标准：
 
-**读寄存器 (CMD=0x03)**
+**单字节读 (CMD=0x03, 4 字节事务)**
 
 ```
 CS LOW →
   MOSI: [A[12:5]] [A[4:0]<<3|0x03] [0xFF等待] [0xFF终止]
   MISO: [IRQ 0x0220] [IRQ 0x0221] [dummy   ] [数据    ]
-→ CS HIGH  →  返回 MISO[3]
+→ 等 BSY=0 → CS HIGH  →  返回 MISO[3]
+```
+
+**块读 (CMD=0x02, 2+N 字节事务) ⭐**
+
+```
+CS LOW → NOP×3 (≥240ns) →
+  MOSI: [A[12:5]] [A[4:0]<<3|0x02] [0x00]...[0x00] [0xFF]
+  MISO: [IRQ 0x0220] [IRQ 0x0221] [d0  ]...[dN-2] [dN-1]
+→ 等 BSY=0 → CS HIGH  →  返回 MISO[2..2+N-1]
+
+关键规则: 只有最后一个数据字节是 0xFF，前面的都是 0x00
 ```
 
 **写寄存器 (CMD=0x04)**
 
 ```
 CS LOW →
-  MOSI: [A[12:5]] [A[4:0]<<3|0x04] [数据]
-  MISO: [IRQ 0x0220] [IRQ 0x0221] [xx  ]
-→ CS HIGH
+  MOSI: [A[12:5]] [A[4:0]<<3|0x04] [数据...]
+  MISO: [IRQ 0x0220] [IRQ 0x0221] [xx    ]
+→ 等 BSY=0 → CS HIGH
 ```
 
 ### 3.4 ESC 寄存器参考
@@ -138,11 +149,33 @@ void ESC_TestReadID(void)
 
 ## 四、Bug 修复清单
 
-| # | 问题 | 修复 |
-|---|------|------|
-| 1 | **CS 上电初始为低** — PA4 默认 RESET，上电瞬间选中 AX58100，可能产生误触发 | `MX_SPI1_Init` 末尾加 `SPI_CS_HIGH()` |
-| 2 | **SPI_ReadBuffer 缓冲区越界** — size>128 时只填充了 dummyTx[0..127]，但 `HAL_SPI_TransmitReceive` 读取到 size 字节 | 加门禁 `if(size>128) return HAL_ERROR` |
-| 3 | **ESC 块读写栈溢出** — `txBuf[259]+rxBuf[259]≈518字节`，超 STM32F103 默认栈 | 改为 `static` 缓冲区，`ESC_MAX_BLOCK_SIZE` 降至 128 |
+| # | 问题 | 严重度 | 修复方式 |
+|---|------|--------|---------|
+| 1 | **CS 上电初始为低** — PA4 默认 RESET，上电瞬间选中 AX58100 | 中 | `MX_SPI1_Init` 末尾加 `SPI_CS_HIGH()` |
+| 2 | **SPI_ReadBuffer 缓冲区越界** — size>128 时越界读取 | 高 | 加门禁 `if(size>128) return HAL_ERROR` |
+| 3 | **ESC 块读写栈溢出** — `txBuf[259]+rxBuf[259]≈518字节` | 高 | 改为 `static`，`ESC_MAX_BLOCK_SIZE` 降至 128 |
+| 4 | **块读所有数据字节均为 0xFF** — ESC 将第一个数据字节当作读终止，导致 `pdiErrCode=0x60`，`g_escError=7` | 🔴致命 | 只有最后一个字节 = 0xFF，前面的字节 = 0x00 |
+| 5 | **SPI_CS_HIGH 时序过早** — HAL 收发返回时移位寄存器可能未完全发送，CS 提前拉高导致错误 | 高 | `SPI_CS_HIGH` 前加 `while(SPI_FLAG_BSY){}` 等待硬件空闲 |
+| 6 | **块读 CMD=0x03 的 wait state 字节被误判为终止** — 0xFF 在 wait state 位置与数据位置语义冲突 | 🔴致命 | 块读改用 CMD=0x02（无等待字节），用 3 个 NOP 替代 wait |
+
+### Bug #4 详析：块读终止字节错误
+
+```c
+// 错误写法 — 每个数据字节都是 0xFF
+for (i = 0; i < size; i++)
+    txBuf[3 + i] = 0xFF;   // 第1个字节 ESC 就认为"终止了"
+
+// 正确写法 — 只有最后一个字节是 0xFF
+for (i = 0; i < size - 1; i++)
+    txBuf[2 + i] = 0x00;   // 非终止
+txBuf[2 + size - 1] = 0xFF; // 最后一个才是终止
+```
+
+AX58100 数据手册规定：MOSI≠0xFF 时 ESC 认为后面还有数据；MOSI=0xFF 时 ESC 停止预取。单字节读不受影响（唯一的那个字节 = 最后一个 = 0xFF 正确），块读受影响严重。
+
+### Bug #6 详析：CMD=0x03 vs CMD=0x02
+
+CMD=0x03（带 wait state byte）在单字节读时正常，但在块读时存在语义问题—wait state 的 0xFF 和数据终止的 0xFF 无法区分。CMD=0x02 去掉 wait state byte，地址段后直接进入数据段，用 NOP 延时满足 t_read ≥ 240ns 的要求。
 
 ---
 
@@ -179,26 +212,34 @@ ESC_TestReadID();       // 测试1: 读 ESC ID (当前默认)
 
 ## 六、SPI 逻辑分析仪期望波形
 
-### 读 0x0000 寄存器（4 字节事务）
+### 单字节读 0x0000 (CMD=0x03, 4 字节)
 
 ```
-CS   ‾‾‾\_________________________/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
-SCK  ‾‾‾‾‾\___/‾\___/‾\___/‾\___/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
-MOSI ______/0x00\__/0x03\__/0xFF\__/0xFF\___________
-MISO ______/IRQ0 \__/IRQ1 \__/  xx \__/DATA\_________
-         Byte0    Byte1    Wait    Read Term
-         (地址)   (地址+命令) (等待) (读数据+终止)
+CS   ‾‾‾\_________________________/‾‾‾‾‾‾‾‾‾‾
+SCK  ‾‾‾‾‾\___/‾\___/‾\___/‾\___/‾‾‾‾‾‾‾‾‾‾
+MOSI ______/0x00\__/0x03\__/0xFF\__/0xFF\______
+MISO ______/IRQ0 \__/IRQ1 \__/xx  \__/0xC8\______
+         Byte0    Byte1    Wait    Data+Term
 ```
 
-### 写 0x0140 寄存器（3 字节事务）
+### 块读 0x1000 8 字节 (CMD=0x02, 10 字节)
 
 ```
-CS   ‾‾‾\___________________/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
-SCK  ‾‾‾‾‾\___/‾\___/‾\___/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
-MOSI ______/0x0A\__/0x04\__/0x05\_____________
-MISO ______/IRQ0 \__/IRQ1 \__/  xx \___________
-         Byte0    Byte1    Data
-         (地址)   (地址+命令) (写数据)
+CS   ‾‾‾\_________________________________/‾‾‾‾
+SCK  ‾‾‾‾‾\___/‾\___/‾\___/‾\___/ ... /‾\___/‾
+MOSI ______/0x80\__/0x02\__/0x00\__/0x00\ ... /0xFF\__
+                NOP×3→                         ↑终止
+MISO ______/IRQ0 \__/IRQ1 \__/d0  \__/d1  \ ... /d7 \__
+         Byte0    Byte1    D0     D1          D7
+```
+
+### 写 0x0140 寄存器 (CMD=0x04, 3 字节)
+
+```
+CS   ‾‾‾\___________________/‾‾‾‾‾‾‾‾‾‾
+SCK  ‾‾‾‾‾\___/‾\___/‾\___/‾‾‾‾‾‾‾‾‾‾
+MOSI ______/0x0A\__/0x04\__/0x05\_______
+MISO ______/IRQ0 \__/IRQ1 \__/xx  \_______
 ```
 
 ---
@@ -221,3 +262,35 @@ MISO ______/IRQ0 \__/IRQ1 \__/  xx \___________
 | Figure 14-17 | PDI SPI 读时序 (2字节地址, 1字节数据, 带等待) |
 | Figure 14-19 | PDI SPI 写时序 (2字节地址, 1字节数据) |
 | Section 4.1 | PDI 配置寄存器 (0x0140, 0x0150) |
+
+---
+
+## 八、踩坑记录总结
+
+> 标注说明：🔴 = 致命 bug，单个即可导致功能不可用；🟡 = 隐患，组合触发
+
+| # | 标注 | 问题 | 现象 | 根因 |
+|---|------|------|------|------|
+| 1 | 🔴 | 块读所有数据字节=0xFF | g_escError=7, pdiErrCnt=0xFF | 0xFF 是 ESC 读终止命令，非普通 dummy |
+| 2 | 🔴 | CMD=0x03 块读语义冲突 | 修了#1仍不对 | wait byte 0xFF 和数据字节 0xFF 同值不同义 |
+| 3 | 🟡 | SPI_CS_HIGH 时序 | 零星 PDI Error | HAL返回时移位寄存器可能仍在发最后bit |
+| 4 | 🟡 | pdiErrCnt 累积不清零 | 误以为修复无效 | 0x030D 只增不减，需断电清零 |
+| 5 | 🟡 | CS 上电为低 | AX58100 意外选中 | CubeMX 默认 Output Low |
+| 6 | 🟡 | 栈溢出风险 | 无崩溃但隐患大 | 块读写函数栈分配 518 字节 |
+
+### Bug #1 和 #2 的关系
+
+这两个 bug 叠加导致了块读完全不工作：
+
+```
+Bug #1: 所有数据字节=0xFF
+  → 修了 → CMD=0x03 的 0xFF wait byte 又制造了一个"假终止"
+  → 再修 → 换 CMD=0x02 + NOP 延时，彻底消除 0xFF 歧义
+```
+
+### 调试教训
+
+1. **单字节测试先行** — 先用 `ESC_ReadRegister(0x0000)` 验证物理层，确认能读到 0xC8 后再搞块读写
+2. **PDI Error Counter 必须先清零** — 断电重启或写 0 到 0x030D，否则旧错误混淆判断
+3. **MOSI 的值有协议语义** — 不是随便发 0xFF 就行，每个 bit 的位置和值都可能触发 ESC 的特定行为
+4. **数据手册的一句话不能跳过** — "If MOSI is low during a data byte transfer, at least one more byte will be read" 这句话就是全部问题的答案

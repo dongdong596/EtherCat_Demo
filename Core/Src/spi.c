@@ -131,6 +131,11 @@ void HAL_SPI_MspDeInit(SPI_HandleTypeDef* spiHandle)
 
 #define SPI_TIMEOUT_MS      100U    /* 阻塞等待超时 */
 
+/* ESC 测试结果 — 全局变量，方便调试时在 Watch 窗口直接观察 */
+volatile uint8_t g_escType   = 0;    /* 0x0000: ESC 类型 */
+volatile uint8_t g_escVer    = 0;    /* 0x0001: ESC 版本 */
+volatile uint8_t g_escError  = 0;    /* 读写测试错误计数 */
+
 /* ─────────────────────────────────────────────────────────────
  * 通用 SPI 基础收发 (含 CS 控制)
  * ───────────────────────────────────────────────────────────── */
@@ -299,24 +304,26 @@ HAL_StatusTypeDef ESC_WriteRegister(uint16_t addr, uint8_t data)
 HAL_StatusTypeDef ESC_ReadBlock(uint16_t addr, uint8_t *pData, uint16_t size)
 {
     HAL_StatusTypeDef status;
-    static uint8_t txBuf[3 + ESC_MAX_BLOCK_SIZE];  /* 静态分配，避免栈溢出 */
-    static uint8_t rxBuf[3 + ESC_MAX_BLOCK_SIZE];
+    static uint8_t txBuf[2 + ESC_MAX_BLOCK_SIZE];  /* only addr + data, no wait byte */
+    static uint8_t rxBuf[2 + ESC_MAX_BLOCK_SIZE];
     uint16_t i;
     uint8_t addr0, addr1;
 
-    if (size > ESC_MAX_BLOCK_SIZE) return HAL_ERROR;
+    if (size == 0 || size > ESC_MAX_BLOCK_SIZE) return HAL_ERROR;
 
-    ESC_EncodeAddress(addr, ESC_CMD_READ, &addr0, &addr1);
+    ESC_EncodeAddress(addr, ESC_CMD_READ_NOWAIT, &addr0, &addr1);
     txBuf[0] = addr0;
     txBuf[1] = addr1;
-    txBuf[2] = 0xFF;                /* wait state byte */
-    for (i = 0; i < size; i++)
+    for (i = 0; i < size - 1; i++)
     {
-        txBuf[3 + i] = 0xFF;        /* read data bytes (MOSI=0xFF 产生时钟) */
+        txBuf[2 + i] = 0x00;        /* 非终止字节: MOSI=0x00, ESC 继续预取 */
     }
+    txBuf[2 + size - 1] = 0xFF;     /* 最后一个: MOSI=0xFF, 读终止 */
 
     SPI_CS_LOW();
-    status = HAL_SPI_TransmitReceive(&hspi1, txBuf, rxBuf, 3 + size, SPI_TIMEOUT_MS);
+    /* 短暂延时, 满足 ESC t_read ≥ 240ns (4.5MHz 下 3 个 NOP 远超此值) */
+    __NOP(); __NOP(); __NOP();
+    status = HAL_SPI_TransmitReceive(&hspi1, txBuf, rxBuf, 2 + size, SPI_TIMEOUT_MS);
     SPI_CS_HIGH();
 
     if (status == HAL_OK)
@@ -325,7 +332,7 @@ HAL_StatusTypeDef ESC_ReadBlock(uint16_t addr, uint8_t *pData, uint16_t size)
         g_esc_irq1 = rxBuf[1];
         for (i = 0; i < size; i++)
         {
-            pData[i] = rxBuf[3 + i]; /* 数据从第 4 字节开始 (跳过地址段和 wait) */
+            pData[i] = rxBuf[2 + i]; /* 数据从第 3 字节开始 (跳过地址段) */
         }
     }
     return status;
@@ -419,31 +426,28 @@ void SPI_SendTestPattern(void)
 
 void ESC_TestReadID(void)
 {
-    uint8_t escType = 0;
-    uint8_t escVer  = 0;
     uint8_t irq0, irq1;
 
-    /* 读取 ESC 类型寄存器 (0x0000) */
-    if (ESC_ReadRegister(0x0000, &escType) == HAL_OK)
+    /* 读 ESC Type (0x0000) */
+    g_escType = 0;
+    if (ESC_ReadRegister(0x0000, (uint8_t *)&g_escType) != HAL_OK)
     {
-        __NOP();    /* 断点: escType 应为有效值 */
+        g_escType = 0xFF;       /* 通信失败标记 */
     }
 
-    /* 读取 ESC 版本寄存器 (0x0001) */
-    if (ESC_ReadRegister(0x0001, &escVer) == HAL_OK)
+    /* 读 ESC Version (0x0001) */
+    g_escVer = 0;
+    if (ESC_ReadRegister(0x0001, (uint8_t *)&g_escVer) != HAL_OK)
     {
-        __NOP();    /* 断点: escVer 查看版本号 */
+        g_escVer = 0xFF;        /* 通信失败标记 */
     }
 
-    /* 获取 IRQ 状态 */
+    /* IRQ 状态 */
     ESC_GetIRQStatus(&irq0, &irq1);
 
-    /* 防止被优化掉 */
-    (void)escType;
-    (void)escVer;
+    __NOP();    /* 在这里设断点，Watch 窗口观察 g_escType / g_escVer */
     (void)irq0;
     (void)irq1;
-    __NOP();
 }
 
 /**
@@ -457,33 +461,90 @@ void ESC_TestReadWrite(void)
     #define TEST_SIZE   8
     uint8_t txData[TEST_SIZE] = {0xA5, 0x5A, 0x01, 0x02, 0x03, 0x04, 0x55, 0xAA};
     uint8_t rxData[TEST_SIZE];
-    uint16_t errorCount = 0;
     uint8_t i;
 
-    /* 先读出原始值备份 (可选，这里省略) */
+    g_escError = 0;
 
-    /* 写入测试数据到 0x1000 */
+    /* 写测试数据到 RAM (0x1000) */
     if (ESC_WriteBlock(0x1000, txData, TEST_SIZE) == HAL_OK)
     {
-        /* 短暂延时确保写入完成 */
         HAL_Delay(1);
 
-        /* 读回数据 */
+        /* 读回 */
         if (ESC_ReadBlock(0x1000, rxData, TEST_SIZE) == HAL_OK)
         {
-            /* 比较数据 */
             for (i = 0; i < TEST_SIZE; i++)
             {
                 if (rxData[i] != txData[i])
                 {
-                    errorCount++;
+                    g_escError++;
                 }
             }
         }
+        else
+        {
+            g_escError = 0xFF;      /* 读失败 */
+        }
+    }
+    else
+    {
+        g_escError = 0xFE;          /* 写失败 */
     }
 
-    __NOP();    /* 断点: errorCount == 0 表示读写正确 */
-    (void)errorCount;
+    __NOP();    /* 断点: g_escError==0 表示读写正确 */
+}
+
+/**
+ * @brief  诊断函数: 一次性读出 ESC 关键信息, 排查问题
+ */
+void ESC_Diagnose(void)
+{
+    /* ---- 基本信息 ---- */
+    volatile uint8_t type     = 0;    /* 0x0000: ESC Type */
+    volatile uint8_t rev      = 0;    /* 0x0001: ESC Revision */
+    volatile uint8_t fmmu     = 0;    /* 0x0004: FMMU 数量 */
+    volatile uint8_t sm       = 0;    /* 0x0005: SyncManager 数量 */
+    volatile uint8_t ramSize  = 0;    /* 0x0008: RAM 大小(KB) */
+
+    /* ---- PDI 错误诊断 ---- */
+    volatile uint8_t pdiErrCnt  = 0;  /* 0x030D: PDI 错误计数 */
+    volatile uint8_t pdiErrCode = 0;  /* 0x030E: 最后错误原因 */
+
+    /* ---- SM0 配置 (看看 0x1000 附近有没有被占用) ---- */
+    volatile uint8_t sm0[8] = {0};    /* 0x0800~0x0807: SM0 配置 */
+
+    /* ---- 0x1000 处现有数据 (不写入, 只读) ---- */
+    volatile uint8_t ram[8] = {0};    /* 0x1000~0x1007: 原始数据 */
+
+    /* ---- 用单字节读写 0x1F00 测试 (远离 SM 区域) ---- */
+    volatile uint8_t testWr = 0xA5;
+    volatile uint8_t testRd = 0;
+
+    /* 读基本信息 */
+    ESC_ReadRegister(0x0000, (uint8_t *)&type);
+    ESC_ReadRegister(0x0001, (uint8_t *)&rev);
+    ESC_ReadRegister(0x0004, (uint8_t *)&fmmu);
+    ESC_ReadRegister(0x0005, (uint8_t *)&sm);
+    ESC_ReadRegister(0x0008, (uint8_t *)&ramSize);
+
+    /* 读 PDI 错误计数 */
+    ESC_ReadRegister(0x030D, (uint8_t *)&pdiErrCnt);
+    ESC_ReadRegister(0x030E, (uint8_t *)&pdiErrCode);
+
+    /* 读 SM0 配置 */
+    ESC_ReadBlock(0x0800, (uint8_t *)sm0, 8);
+
+    /* 读 0x1000 处原始数据 */
+    ESC_ReadBlock(0x1000, (uint8_t *)ram, 8);
+
+    /* 单字节写 0x1F00 然后读回 (远离 SM 区域的高地址) */
+    ESC_WriteRegister(0x1F00, 0xA5);
+    ESC_ReadRegister (0x1F00, (uint8_t *)&testRd);
+
+    __NOP();    /* 断点: 观察上面所有变量 */
+    (void)type; (void)rev; (void)fmmu; (void)sm; (void)ramSize;
+    (void)pdiErrCnt; (void)pdiErrCode;
+    (void)sm0[0]; (void)ram[0]; (void)testWr; (void)testRd;
 }
 
 /* USER CODE END 1 */
