@@ -53,27 +53,6 @@ extern SPI_HandleTypeDef hspi1;
                                     HAL_GPIO_WritePin(SPI_CS_PORT, SPI_CS_PIN, GPIO_PIN_SET); \
                                 } while(0)
 
-/* ----------------------------------------------------------------
- * AX58100 ESC PDI 专用
- * ----------------------------------------------------------------
- *
- * 命令码 (Table 6-2: SPI commands CMD0 and CMD1)
- *   010 = Read
- *   011 = Read with Wait State (推荐, 自动插入 0xFF 等待字节)
- *   100 = Write
- *   110 = Address Extension (3 字节地址模式)
- *
- * SCS_ESC ── PA4     (PDI SPI, 访问 ESC 寄存器/内存)
- * SCS_FUNC ── 未配置  (Function SPI, 访问 AX58100 外设寄存器)
- * SCK      ── PA5
- * MISO     ── PA6
- * MOSI     ── PA7
- * 通信模式: SPI Mode 3 (CPOL=1, CPHA=1), MSB first, 4.5 MHz
- */
-#define ESC_CMD_READ            0x03U   /* 模式1: Read+Wait State (保留) */
-#define ESC_CMD_READ_NOWAIT     0x02U   /* 模式2: Read 无等待 (推荐块读用) */
-#define ESC_CMD_WRITE           0x04U
-#define ESC_MAX_BLOCK_SIZE      128U
 
 /* USER CODE END Private defines */
 
@@ -97,21 +76,6 @@ HAL_StatusTypeDef SPI_WriteReadBuffer(uint8_t *pTxData, uint8_t *pRxData, uint16
 void SPI_LoopbackTest(void);       /* 自环回: 短接 MOSI/MISO 验证底层硬件 */
 void SPI_SendTestPattern(void);    /* 波形测试: 0x55/0xAA 交替, 示波器观察 */
 
-/* ----------------------------------------------------------------
- * AX58100 ESC PDI 专用
- * ---------------------------------------------------------------- */
-
-/* ESC 寄存器访问 (2 字节地址模式, 带等待状态) */
-HAL_StatusTypeDef ESC_ReadRegister(uint16_t addr, uint8_t *pData);
-HAL_StatusTypeDef ESC_WriteRegister(uint16_t addr, uint8_t data);
-HAL_StatusTypeDef ESC_ReadBlock(uint16_t addr, uint8_t *pData, uint16_t size);
-HAL_StatusTypeDef ESC_WriteBlock(uint16_t addr, uint8_t *pData, uint16_t size);
-void              ESC_GetIRQStatus(uint8_t *irq0, uint8_t *irq1);
-
-/* ESC 测试 */
-void ESC_TestReadID(void);         /* 读 ESC Type/Version 寄存器, 验证通信 */
-void ESC_TestReadWrite(void);      /* 读写用户 RAM 区域, 验证 PDI 功能 */
-void ESC_Diagnose(void);           /* 诊断: 读 PDI 错误/ SM 配置 / RAM 前几个字节 */
 
 /* USER CODE END Prototypes */
 

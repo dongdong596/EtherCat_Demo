@@ -102,15 +102,23 @@ CS LOW →
 → 等 BSY=0 → CS HIGH  →  返回 MISO[3]
 ```
 
-**块读 (CMD=0x02, 2+N 字节事务) ⭐**
+**块读 (CMD=0x02, 分两次 SPI 传输) ⭐**
 
 ```
-CS LOW → NOP×3 (≥240ns) →
-  MOSI: [A[12:5]] [A[4:0]<<3|0x02] [0x00]...[0x00] [0xFF]
-  MISO: [IRQ 0x0220] [IRQ 0x0221] [d0  ]...[dN-2] [dN-1]
+CS LOW →
+  【第一次传输: 地址段 2 字节】
+    MOSI: [A[12:5]] [A[4:0]<<3|0x02]
+    MISO: [IRQ 0x0220] [IRQ 0x0221]
+  → NOP×10 (≥240ns, ESC 趁此间隙取数据)
+  【第二次传输: 数据段 N 字节】
+    MOSI: [0x00]...[0x00] [0xFF]
+    MISO: [d0  ]...[dN-2] [dN-1]
 → 等 BSY=0 → CS HIGH  →  返回 MISO[2..2+N-1]
 
-关键规则: 只有最后一个数据字节是 0xFF，前面的都是 0x00
+关键规则:
+- CS 全程拉低，两次传输之间 SPI 时钟停止
+- 只有最后一个数据字节是 0xFF，前面的都是 0x00
+- NOP 放在两次 HAL 调用之间（地址和数据之间），而非 CS LOW 之后
 ```
 
 **写寄存器 (CMD=0x04)**
@@ -156,7 +164,7 @@ void ESC_TestReadID(void)
 | 3 | **ESC 块读写栈溢出** — `txBuf[259]+rxBuf[259]≈518字节` | 高 | 改为 `static`，`ESC_MAX_BLOCK_SIZE` 降至 128 |
 | 4 | **块读所有数据字节均为 0xFF** — ESC 将第一个数据字节当作读终止，导致 `pdiErrCode=0x60`，`g_escError=7` | 🔴致命 | 只有最后一个字节 = 0xFF，前面的字节 = 0x00 |
 | 5 | **SPI_CS_HIGH 时序过早** — HAL 收发返回时移位寄存器可能未完全发送，CS 提前拉高导致错误 | 高 | `SPI_CS_HIGH` 前加 `while(SPI_FLAG_BSY){}` 等待硬件空闲 |
-| 6 | **块读 CMD=0x03 的 wait state 字节被误判为终止** — 0xFF 在 wait state 位置与数据位置语义冲突 | 🔴致命 | 块读改用 CMD=0x02（无等待字节），用 3 个 NOP 替代 wait |
+| 6 | **块读 CMD=0x03 的 wait state 字节被误判为终止** — 0xFF 在 wait state 位置与数据位置语义冲突 | 🔴致命 | 块读改用 CMD=0x02（无等待字节），拆为两次 SPI 传输，NOP 放在地址和数据之间替代 wait |
 
 ### Bug #4 详析：块读终止字节错误
 
@@ -175,7 +183,7 @@ AX58100 数据手册规定：MOSI≠0xFF 时 ESC 认为后面还有数据；MOSI
 
 ### Bug #6 详析：CMD=0x03 vs CMD=0x02
 
-CMD=0x03（带 wait state byte）在单字节读时正常，但在块读时存在语义问题—wait state 的 0xFF 和数据终止的 0xFF 无法区分。CMD=0x02 去掉 wait state byte，地址段后直接进入数据段，用 NOP 延时满足 t_read ≥ 240ns 的要求。
+CMD=0x03（带 wait state byte）在单字节读时正常，但在块读时存在语义问题—wait state 的 0xFF 和数据终止的 0xFF 无法区分。CMD=0x02 去掉 wait state byte，将一次 SPI 传输拆为两次：第一次发地址段，第二次发数据段。NOP 放在两次传输之间，此时 SPI 时钟停止，ESC 有充足时间从内部 RAM 取数据，满足 t_read ≥ 240ns 的要求。
 
 ---
 
@@ -222,15 +230,15 @@ MISO ______/IRQ0 \__/IRQ1 \__/xx  \__/0xC8\______
          Byte0    Byte1    Wait    Data+Term
 ```
 
-### 块读 0x1000 8 字节 (CMD=0x02, 10 字节)
+### 块读 0x1000 8 字节 (CMD=0x02, 分两次 SPI 传输)
 
 ```
 CS   ‾‾‾\_________________________________/‾‾‾‾
-SCK  ‾‾‾‾‾\___/‾\___/‾\___/‾\___/ ... /‾\___/‾
-MOSI ______/0x80\__/0x02\__/0x00\__/0x00\ ... /0xFF\__
-                NOP×3→                         ↑终止
-MISO ______/IRQ0 \__/IRQ1 \__/d0  \__/d1  \ ... /d7 \__
-         Byte0    Byte1    D0     D1          D7
+SCK  ‾‾‾‾‾\___/‾\___/‾‾‾‾‾‾‾‾‾‾‾‾\___/‾\___/ ... /‾\___/‾
+MOSI ______/0x80\__/0x02\__‾‾‾‾‾‾‾‾‾‾‾\__/0x00\__/0x00\ ... /0xFF\__
+         Byte0    Byte1     NOP×10→        D0      D1          D7
+MISO ______/IRQ0 \__/IRQ1 \__‾‾‾‾‾‾‾‾‾‾‾‾\__/d0  \__/d1  \ ... /d7 \__
+         第1次 HAL 传输(2字节)     第2次 HAL 传输(8字节)
 ```
 
 ### 写 0x0140 寄存器 (CMD=0x04, 3 字节)
@@ -285,7 +293,7 @@ MISO ______/IRQ0 \__/IRQ1 \__/xx  \_______
 ```
 Bug #1: 所有数据字节=0xFF
   → 修了 → CMD=0x03 的 0xFF wait byte 又制造了一个"假终止"
-  → 再修 → 换 CMD=0x02 + NOP 延时，彻底消除 0xFF 歧义
+  → 再修 → 换 CMD=0x02 + 拆为两次 SPI 传输 + NOP 在中间延时，彻底消除 0xFF 歧义
 ```
 
 ### 调试教训
