@@ -3,8 +3,17 @@
   * @file    AX58100.c
   * @brief   AX58100 ESC 驱动实现
   *
+  *  ╔══════════════════════════════════════════════════════════════╗
+  *  ║  文件结构                                                     ║
+  *  ║    §A  PDI 地址编码                                           ║
+  *  ║    §B  PDI 传输层 — 寄存器读写                                 ║
+  *  ║    §C  SyncManager 管理 — 配置 / 初始化 / 回读                 ║
+  *  ║    §D  ESC 完整信息读取                                        ║
+  *  ║    §E  测试 / 诊断                                            ║
+  *  ╚══════════════════════════════════════════════════════════════╝
+  *
   *  层次:
-  *    ax58100.c  →  ESC PDI 协议 + 寄存器操作 + 状态机 + 应用
+  *    ax58100.c  →  ESC PDI 协议 + 寄存器操作 + SM 管理 + 应用
   *    spi.c      →  SPI 硬件抽象 (CS 控制, 字节收发)
   ******************************************************************************
   */
@@ -29,7 +38,11 @@ static uint8_t g_esc_irq0 = 0;       /* AL Event Request [7:0]  (0x0220) */
 static uint8_t g_esc_irq1 = 0;       /* AL Event Request [15:8] (0x0221) */
 
 /* ================================================================
- * PDI 地址编码 (Beckhoff ESC SPI 2 字节地址模式)
+ * §A  PDI 地址编码
+ *     Beckhoff ESC SPI 2 字节地址模式:
+ *       Byte0 = A[12:5]
+ *       Byte1 = {A[4:0], CMD[2:0]}
+ *     13 位地址覆盖 0x0000~0x1FFF, 3 位命令区分读/写/块读
  * ================================================================ */
 
 /**
@@ -37,7 +50,7 @@ static uint8_t g_esc_irq1 = 0;       /* AL Event Request [15:8] (0x0221) */
  * @param  addr: 13 位寄存器地址 (0x0000 ~ 0x1FFF)
  * @param  cmd:  3 位命令码 (ESC_CMD_READ / READ_NOWAIT / WRITE)
  * @param  pAddr0: 输出 Byte0 = A[12:5]
- * @param  pAddr1: 输出 Byte1 = A[4:0]<<3 | CMD[2:0]
+ * @param  pAddr1: 输出 Byte1 = {A[4:0], CMD[2:0]}
  */
 static void ESC_EncodeAddress(uint16_t addr, uint8_t cmd,
                                uint8_t *pAddr0, uint8_t *pAddr1)
@@ -47,11 +60,13 @@ static void ESC_EncodeAddress(uint16_t addr, uint8_t cmd,
 }
 
 /* ================================================================
- * ESC 寄存器读写 (PDI 传输层)
+ * §B  PDI 传输层  — ESC 寄存器读写
  * ================================================================ */
 
 /**
  * @brief  ESC 读单个寄存器 (CMD=0x03, Read + Wait State)
+ * @note   SPI 帧: {addr0, addr1, 0xFF(wait), 0xFF(read_term)} → 4 字节
+ *         ESC 在第 2 字节返回 IRQ 状态, 第 4 字节返回寄存器数据
  */
 HAL_StatusTypeDef ESC_ReadRegister(uint16_t addr, uint8_t *pData)
 {
@@ -81,6 +96,7 @@ HAL_StatusTypeDef ESC_ReadRegister(uint16_t addr, uint8_t *pData)
 
 /**
  * @brief  ESC 写单个寄存器 (CMD=0x04)
+ * @note   SPI 帧: {addr0, addr1, data} → 3 字节
  */
 HAL_StatusTypeDef ESC_WriteRegister(uint16_t addr, uint8_t data)
 {
@@ -108,7 +124,7 @@ HAL_StatusTypeDef ESC_WriteRegister(uint16_t addr, uint8_t data)
 
 /**
  * @brief  ESC 读多个连续寄存器 (块读, CMD=0x02)
- *  @note  拆为两次 SPI 传输: 地址段 → NOP 延时 → 数据段
+ * @note   拆为两次 SPI 传输: 地址段 → NOP 延时 → 数据段
  *         NOP 放在地址和数据之间, 满足 ESC t_read ≥ 240ns
  *         详见: 踩坑记录_NOP延时位置错误.md
  */
@@ -199,6 +215,7 @@ HAL_StatusTypeDef ESC_WriteBlock(uint16_t addr, uint8_t *pData, uint16_t size)
 /**
  * @brief  获取最近一次 SPI 事务的 ESC 中断请求状态
  * @note   ESC 在每次 SPI 地址段自动返回 AL Event Request 寄存器值
+ *         (0x0220~0x0221), 本函数读取缓存而不发起新 SPI 事务
  */
 void ESC_GetIRQStatus(uint8_t *irq0, uint8_t *irq1)
 {
@@ -207,49 +224,144 @@ void ESC_GetIRQStatus(uint8_t *irq0, uint8_t *irq1)
 }
 
 /* ================================================================
- * SyncManager 配置
+ * §C  SyncManager 管理
+ *     ESC 有 8 个 SM 通道 (0~7), 每通道 16 字节配置空间.
+ *
+ *     典型分配:
+ *       SM0: 邮箱 M→S  0x1000  128B  (主站 → 从站 邮箱命令)
+ *       SM1: 邮箱 S→M  0x1080  128B  (从站 → 主站 邮箱响应)
+ *       SM2: 缓冲 M→S  0x1100   32B  (主站 → 从站 过程数据)
+ *       SM3: 缓冲 S→M  0x1120   32B  (从站 → 主站 过程数据)
+ *       SM4~SM7: 保留, 未使用
+ *
+ *     注意:
+ *       - 有主站时, SM 配置由主站通过网线在 PreOp 阶段写入
+ *       - 以下函数仅用于无主站自测 / 调试
  * ================================================================ */
 
 /**
- * @brief  读一个 SM 通道的完整配置
- * @param  smIdx: SM 索引 (0~7)
+ * @brief  用默认布局一键初始化 SM0~SM3 (无主站自测用)
+ *
+ *          SM0: 邮箱输出  0x1000  128B  M2S_MAILBOX
+ *          SM1: 邮箱输入  0x1080  128B  S2M_MAILBOX
+ *          SM2: 过程输出  0x1100   32B  M2S_BUFFERED
+ *          SM3: 过程输入  0x1120   32B  S2M_BUFFERED
  */
-void ESC_ReadSMConfig(uint8_t smIdx, uint16_t *pStartAddr, uint16_t *pLength,
-                      uint8_t *pControl, uint8_t *pStatus)
+void ESC_SM_Init(void)
+{
+    ESC_SM_Config_t cfg;
+
+    /* SM0: 邮箱输出 (主→从) */
+    cfg.startAddr = SM0_DEFAULT_ADDR;
+    cfg.length    = SM0_DEFAULT_LEN;
+    cfg.control   = SM0_DEFAULT_CTRL;
+    cfg.activate  = 1;
+    cfg.pdiCtrl   = 0;
+    ESC_SM_Config(0, &cfg);
+
+    /* SM1: 邮箱输入 (从→主) */
+    cfg.startAddr = SM1_DEFAULT_ADDR;
+    cfg.length    = SM1_DEFAULT_LEN;
+    cfg.control   = SM1_DEFAULT_CTRL;
+    cfg.activate  = 1;
+    cfg.pdiCtrl   = 0;
+    ESC_SM_Config(1, &cfg);
+
+    /* SM2: 过程数据输出 (主→从, 缓冲模式) */
+    cfg.startAddr = SM2_DEFAULT_ADDR;
+    cfg.length    = SM2_DEFAULT_LEN;
+    cfg.control   = SM2_DEFAULT_CTRL;
+    cfg.activate  = 1;
+    cfg.pdiCtrl   = 0;
+    ESC_SM_Config(2, &cfg);
+
+    /* SM3: 过程数据输入 (从→主, 缓冲模式) */
+    cfg.startAddr = SM3_DEFAULT_ADDR;
+    cfg.length    = SM3_DEFAULT_LEN;
+    cfg.control   = SM3_DEFAULT_CTRL;
+    cfg.activate  = 1;
+    cfg.pdiCtrl   = 0;
+    ESC_SM_Config(3, &cfg);
+}
+
+/**
+ * @brief  读单个 SM 通道的完整配置到结构体
+ * @param  smIdx: SM 索引 (0~7)
+ * @param  pCfg:  输出 — 填充 6 字段 (含只读 status)
+ * @note   使用块读, 一次 SPI 事务读回 8 字节
+ */
+void ESC_SM_ReadConfig(uint8_t smIdx, ESC_SM_Config_t *pCfg)
 {
     uint16_t smBase = ESC_REG_SM_BASE + (uint16_t)smIdx * ESC_REG_SM_STRIDE;
     uint8_t buf[8];
 
     ESC_ReadBlock(smBase, buf, 8);
 
-    *pStartAddr = (uint16_t)buf[SM_OFF_PHYS_START]
-                | ((uint16_t)buf[SM_OFF_PHYS_START + 1] << 8);
-    *pLength    = (uint16_t)buf[SM_OFF_LENGTH]
-                | ((uint16_t)buf[SM_OFF_LENGTH + 1] << 8);
-    *pControl   = buf[SM_OFF_CONTROL];
-    if (pStatus) *pStatus = buf[SM_OFF_STATUS];
+    pCfg->startAddr = (uint16_t)buf[SM_OFF_PHYS_START]
+                    | ((uint16_t)buf[SM_OFF_PHYS_START + 1] << 8);
+    pCfg->length    = (uint16_t)buf[SM_OFF_LENGTH]
+                    | ((uint16_t)buf[SM_OFF_LENGTH + 1] << 8);
+    pCfg->control   = buf[SM_OFF_CONTROL];
+    pCfg->status    = buf[SM_OFF_STATUS];
+    pCfg->activate  = buf[SM_OFF_ACTIVATE];
+    pCfg->pdiCtrl   = buf[SM_OFF_PDI_CTRL];
 }
 
 /**
- * @brief  写一个 SM 通道的配置
- * @note   在真实系统中, SM 配置由主站通过网线写入;
- *         此函数仅在无主站自测时使用
+ * @brief  写单个 SM 通道的完整配置到 ESC
+ * @param  smIdx: SM 索引 (0~7)
+ * @param  pCfg:  要写入的配置
+ * @note   逐寄存器写入 (6 次单寄存器 SPI 事务)
+ *         不写 status 字段 (只读寄存器)
+ */
+void ESC_SM_Config(uint8_t smIdx, const ESC_SM_Config_t *pCfg)
+{
+    uint16_t smBase = ESC_REG_SM_BASE + (uint16_t)smIdx * ESC_REG_SM_STRIDE;
+
+    ESC_WriteRegister(smBase + SM_OFF_PHYS_START,     (uint8_t)(pCfg->startAddr & 0xFF));
+    ESC_WriteRegister(smBase + SM_OFF_PHYS_START + 1, (uint8_t)(pCfg->startAddr >> 8));
+    ESC_WriteRegister(smBase + SM_OFF_LENGTH,         (uint8_t)(pCfg->length & 0xFF));
+    ESC_WriteRegister(smBase + SM_OFF_LENGTH + 1,     (uint8_t)(pCfg->length >> 8));
+    ESC_WriteRegister(smBase + SM_OFF_CONTROL,        pCfg->control);
+    ESC_WriteRegister(smBase + SM_OFF_ACTIVATE,       pCfg->activate);
+    ESC_WriteRegister(smBase + SM_OFF_PDI_CTRL,       pCfg->pdiCtrl);
+}
+
+/* ── 向后兼容接口 (内部转为新 API) ── */
+
+/**
+ * @brief  [兼容] 读 SM 通道配置 (旧接口, 逐参数)
+ * @note   推荐使用 ESC_SM_ReadConfig() 新接口
+ */
+void ESC_ReadSMConfig(uint8_t smIdx, uint16_t *pStartAddr, uint16_t *pLength,
+                      uint8_t *pControl, uint8_t *pStatus)
+{
+    ESC_SM_Config_t cfg;
+    ESC_SM_ReadConfig(smIdx, &cfg);
+    *pStartAddr = cfg.startAddr;
+    *pLength    = cfg.length;
+    *pControl   = cfg.control;
+    if (pStatus) *pStatus = cfg.status;
+}
+
+/**
+ * @brief  [兼容] 写 SM 通道配置 (旧接口, 逐参数)
+ * @note   推荐使用 ESC_SM_Config() 新接口
  */
 void ESC_WriteSMConfig(uint8_t smIdx, uint16_t startAddr, uint16_t length,
                        uint8_t control, uint8_t activate)
 {
-    uint16_t smBase = ESC_REG_SM_BASE + (uint16_t)smIdx * ESC_REG_SM_STRIDE;
-
-    ESC_WriteRegister(smBase + SM_OFF_PHYS_START,     (uint8_t)(startAddr & 0xFF));
-    ESC_WriteRegister(smBase + SM_OFF_PHYS_START + 1, (uint8_t)(startAddr >> 8));
-    ESC_WriteRegister(smBase + SM_OFF_LENGTH,         (uint8_t)(length & 0xFF));
-    ESC_WriteRegister(smBase + SM_OFF_LENGTH + 1,     (uint8_t)(length >> 8));
-    ESC_WriteRegister(smBase + SM_OFF_CONTROL,        control);
-    ESC_WriteRegister(smBase + SM_OFF_ACTIVATE,       activate);
+    ESC_SM_Config_t cfg;
+    cfg.startAddr = startAddr;
+    cfg.length    = length;
+    cfg.control   = control;
+    cfg.activate  = activate;
+    cfg.pdiCtrl   = 0;
+    ESC_SM_Config(smIdx, &cfg);
 }
 
 /* ================================================================
- * 第3步: ESC 完整信息读取
+ * §D  ESC 完整信息读取
  * ================================================================ */
 
 /**
@@ -294,7 +406,7 @@ HAL_StatusTypeDef AX58100_ReadESCInfo(void)
 }
 
 /* ================================================================
- * 测试 / 诊断
+ * §E  测试 / 诊断
  * ================================================================ */
 
 /**
@@ -388,8 +500,8 @@ void ESC_Diagnose(void)
     volatile uint8_t pdiErrCnt  = 0;  /* PDI 错误计数 */
     volatile uint8_t pdiErrCode = 0;  /* 最后错误原因 */
 
-    /* ---- SM0 配置 ---- */
-    volatile uint8_t sm0[8] = {0};    /* SM0 前 8 字节 */
+    /* ---- SM0 配置 (新结构体) ---- */
+    volatile ESC_SM_Config_t sm0Cfg = {0};
 
     /* ---- 0x1000 处现有数据 ---- */
     volatile uint8_t ram[8] = {0};    /* 原始数据 */
@@ -409,8 +521,8 @@ void ESC_Diagnose(void)
     ESC_ReadRegister(ESC_REG_PDI_ERR_CNT,  (uint8_t *)&pdiErrCnt);
     ESC_ReadRegister(ESC_REG_PDI_ERR_CODE, (uint8_t *)&pdiErrCode);
 
-    /* 读 SM0 配置 */
-    ESC_ReadBlock(ESC_REG_SM_BASE, (uint8_t *)sm0, 8);
+    /* 读 SM0 配置 (使用新 SM 管理接口) */
+    ESC_SM_ReadConfig(0, (ESC_SM_Config_t *)&sm0Cfg);
 
     /* 读 0x1000 处原始数据 */
     ESC_ReadBlock(ESC_RAM_BASE, (uint8_t *)ram, 8);
@@ -420,7 +532,4 @@ void ESC_Diagnose(void)
     ESC_ReadRegister (0x1F00, (uint8_t *)&testRd);
 
     __NOP();    /* 断点: 观察上面所有变量 */
-    (void)type; (void)rev; (void)fmmu; (void)sm; (void)ramSize;
-    (void)pdiErrCnt; (void)pdiErrCode;
-    (void)sm0[0]; (void)ram[0]; (void)testWr; (void)testRd;
 }

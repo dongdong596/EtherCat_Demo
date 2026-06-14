@@ -39,8 +39,6 @@ static uint8_t IsValidTransition(uint8_t from, uint8_t to)
     }
 }
 
-static void ECAT_SM_Init(void);  /* 前向声明, 实现在文件末尾 */
-
 static void OnEnterState(uint8_t newState)
 {
     switch (newState)
@@ -50,7 +48,7 @@ static void OnEnterState(uint8_t newState)
         break;
     case ESC_STATE_PREOP:
         /* 配默认 SM (无主站自测时使用; 有主站时主站会通过网线覆写) */
-        ECAT_SM_Init();
+        ESC_SM_Init();
         break;
     case ESC_STATE_SAFEOP:
         /* TODO 第5/6步: 验证 SM/FMMU 配置 */
@@ -115,27 +113,6 @@ static uint8_t _ECAT_DoTransition(uint8_t requestedState)
     ESC_WriteRegister(ESC_REG_AL_STATUS_CODE + 1, 0x00);
 
     return m_currentState;
-}
-
-/* ================================================================
- * SyncManager 初始化
- * ================================================================ */
-
-/**
- * @brief  配置默认 SM0~SM3 布局 (无主站自测用)
- *         有主站时主站会在 PreOp 阶段通过网线覆写
- *
- *  SM0: 0x1000, 128B, 邮箱 (主→从)
- *  SM1: 0x1080, 128B, 邮箱 (从→主)
- *  SM2: 0x1100,  32B, 缓冲 (主→从, 过程数据)
- *  SM3: 0x1120,  32B, 缓冲 (从→主, 过程数据)
- */
-static void ECAT_SM_Init(void)
-{
-    ESC_WriteSMConfig(0, SM0_DEFAULT_ADDR, SM0_DEFAULT_LEN, SM0_DEFAULT_CTRL, 1);
-    ESC_WriteSMConfig(1, SM1_DEFAULT_ADDR, SM1_DEFAULT_LEN, SM1_DEFAULT_CTRL, 1);
-    ESC_WriteSMConfig(2, SM2_DEFAULT_ADDR, SM2_DEFAULT_LEN, SM2_DEFAULT_CTRL, 1);
-    ESC_WriteSMConfig(3, SM3_DEFAULT_ADDR, SM3_DEFAULT_LEN, SM3_DEFAULT_CTRL, 1);
 }
 
 /* ================================================================
