@@ -21,7 +21,7 @@
 #include "spi.h"
 #include "gpio.h"
 #include "AX58100.h"
-
+#include "app_ethercat.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -94,7 +94,11 @@ int main(void)
   /* 上电后读取 ESC 完整信息, 结果存入 g_escInfo 结构体
    * 设断点在下一行, Watch 窗口展开 g_escInfo 查看所有字段 */
   AX58100_ReadESCInfo();
-  __NOP();    /* 断点: 观察 g_escInfo.type / g_escInfo.fmmuSupported / g_escInfo.mac 等 */
+
+  /* 初始化 EtherCAT 状态机, 写 AL Status = Init */
+  ECAT_Init();
+
+  __NOP();    /* 断点: 观察 g_escInfo + ECAT_GetState() */
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -108,23 +112,31 @@ int main(void)
     /* ============================================================
      * AX58100 ESC 测试菜单
      *
+     * [CORE] ECAT_MainTask():       (第4步) 状态机循环 — 正常运行时默认
+     *
+     * [T]  ECAT_SelfTest():         (第4步自测) 不需网线, 返回 0 = 通过
+     *                              手动模拟 Init→PreOp→SafeOp→Op→Init 全流程
      * [1] AX58100_ReadESCInfo():   (第3步) 块读 ESC 完整信息 → g_escInfo
-     * [2] ESC_TestReadID():        验证通信, 读 Type/Version → g_escType/g_escVer
-     * [3] ESC_TestReadWrite():     读写用户 RAM (0x1000), 验证 PDI 功能
-     * [4] ESC_Diagnose():          全诊断: 身份+PDI+SM0+RAM+读写测试
-     * [5] SPI_LoopbackTest():      自环回 - 需短接 PA6(MISO) 和 PA7(MOSI)
-     * [6] SPI_SendTestPattern():   波形测试 - 示波器观察 SCK/MOSI
+     * [2] ESC_TestReadID():        验证通信, 读 Type/Version
+     * [3] ESC_TestReadWrite():     读写用户 RAM, 验证 PDI 功能
+     * [4] ESC_Diagnose():          全诊断: 身份+PDI+SM0+RAM
+     * [5] SPI_LoopbackTest():      自环回 - 需短接 MISO/MOSI
+     * [6] SPI_SendTestPattern():   波形测试 - 示波器观察
      * ============================================================ */
 
-    /* ---- 选择测试: 取消注释下面其中一行 ---- */
+    /* ---- 状态机 (正常运行时启用) ---- */
+    // ECAT_MainTask();
+
+    /* ---- 测试模式: 取消注释下面其中一行 ---- */
+    ECAT_SelfTest();              /* [T] 第4步自测: 返回 0 即通过 */
     // AX58100_ReadESCInfo();      /* [1] 第3步: ESC 完整信息    */
     // ESC_TestReadID();           /* [2] 读 ESC 类型/版本       */
     // ESC_TestReadWrite();        /* [3] 读写用户 RAM           */
-    ESC_Diagnose();                /* [4] 全诊断 (默认)          */
+    // ESC_Diagnose();             /* [4] 全诊断                 */
     // SPI_LoopbackTest();         /* [5] 自环回                 */
     // SPI_SendTestPattern();      /* [6] 发送波形               */
 
-    HAL_Delay(500);               /* 500ms 延迟 */
+    HAL_Delay(10);                /* 状态机 10ms 周期 */
   }
   /* USER CODE END 3 */
 }

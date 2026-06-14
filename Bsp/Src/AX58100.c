@@ -207,6 +207,48 @@ void ESC_GetIRQStatus(uint8_t *irq0, uint8_t *irq1)
 }
 
 /* ================================================================
+ * SyncManager 配置
+ * ================================================================ */
+
+/**
+ * @brief  读一个 SM 通道的完整配置
+ * @param  smIdx: SM 索引 (0~7)
+ */
+void ESC_ReadSMConfig(uint8_t smIdx, uint16_t *pStartAddr, uint16_t *pLength,
+                      uint8_t *pControl, uint8_t *pStatus)
+{
+    uint16_t smBase = ESC_REG_SM_BASE + (uint16_t)smIdx * ESC_REG_SM_STRIDE;
+    uint8_t buf[8];
+
+    ESC_ReadBlock(smBase, buf, 8);
+
+    *pStartAddr = (uint16_t)buf[SM_OFF_PHYS_START]
+                | ((uint16_t)buf[SM_OFF_PHYS_START + 1] << 8);
+    *pLength    = (uint16_t)buf[SM_OFF_LENGTH]
+                | ((uint16_t)buf[SM_OFF_LENGTH + 1] << 8);
+    *pControl   = buf[SM_OFF_CONTROL];
+    if (pStatus) *pStatus = buf[SM_OFF_STATUS];
+}
+
+/**
+ * @brief  写一个 SM 通道的配置
+ * @note   在真实系统中, SM 配置由主站通过网线写入;
+ *         此函数仅在无主站自测时使用
+ */
+void ESC_WriteSMConfig(uint8_t smIdx, uint16_t startAddr, uint16_t length,
+                       uint8_t control, uint8_t activate)
+{
+    uint16_t smBase = ESC_REG_SM_BASE + (uint16_t)smIdx * ESC_REG_SM_STRIDE;
+
+    ESC_WriteRegister(smBase + SM_OFF_PHYS_START,     (uint8_t)(startAddr & 0xFF));
+    ESC_WriteRegister(smBase + SM_OFF_PHYS_START + 1, (uint8_t)(startAddr >> 8));
+    ESC_WriteRegister(smBase + SM_OFF_LENGTH,         (uint8_t)(length & 0xFF));
+    ESC_WriteRegister(smBase + SM_OFF_LENGTH + 1,     (uint8_t)(length >> 8));
+    ESC_WriteRegister(smBase + SM_OFF_CONTROL,        control);
+    ESC_WriteRegister(smBase + SM_OFF_ACTIVATE,       activate);
+}
+
+/* ================================================================
  * 第3步: ESC 完整信息读取
  * ================================================================ */
 
@@ -248,33 +290,6 @@ HAL_StatusTypeDef AX58100_ReadESCInfo(void)
     g_escType = g_escInfo.type;
     g_escVer  = g_escInfo.revision;
 
-    return HAL_OK;
-}
-
-/* ================================================================
- * 第4步: 状态机 (占位, 待实现)
- * ================================================================ */
-
-HAL_StatusTypeDef AX58100_GetState(uint8_t *pState)
-{
-    /* 读 AL Status 寄存器低字节 */
-    return ESC_ReadRegister(ESC_REG_AL_STATUS, pState);
-}
-
-HAL_StatusTypeDef AX58100_SetState(uint8_t state)
-{
-    /* 写 AL Status 寄存器低字节 (让主站知道当前状态) */
-    return ESC_WriteRegister(ESC_REG_AL_STATUS, state);
-}
-
-HAL_StatusTypeDef AX58100_HandleStateMachine(void)
-{
-    /* TODO: 第4步完整实现
-     * 1. 读 0x0120 AL Control → 看主站要我切到哪个状态
-     * 2. 执行状态切换前的准备工作
-     * 3. 写 0x0130 AL Status → 告诉主站我已就绪
-     * 4. 写 0x0134 AL Status Code (出错时)
-     */
     return HAL_OK;
 }
 

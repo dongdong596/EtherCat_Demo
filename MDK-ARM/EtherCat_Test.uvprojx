@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F103xB</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;..\Bsp\Inc</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;..\Bsp\Inc;..\App\Inc</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -503,6 +503,16 @@
               <FileName>AX58100.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Bsp\Src\AX58100.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>App</GroupName>
+          <Files>
+            <File>
+              <FileName>app_ethercat.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\Src\app_ethercat.c</FilePath>
             </File>
           </Files>
         </Group>

@@ -81,6 +81,26 @@ extern "C" {
 #define ESC_REG_SM_BASE         0x0800U /* SM0 起始                       */
 #define ESC_REG_SM_STRIDE       0x0010U /* 每 SM 16 字节                  */
 
+/* SM 内部偏移 (加到 SM 基址上) */
+#define SM_OFF_PHYS_START       0x00U   /* 物理起始地址 (2B, Little-Endian) */
+#define SM_OFF_LENGTH           0x02U   /* 长度          (2B)              */
+#define SM_OFF_CONTROL          0x04U   /* 控制寄存器    (1B)              */
+#define SM_OFF_STATUS           0x05U   /* 状态寄存器    (1B, 只读)        */
+#define SM_OFF_ACTIVATE         0x06U   /* 激活          (1B, 1=启用)      */
+#define SM_OFF_PDI_CTRL         0x07U   /* PDI 控制      (1B)              */
+
+/* SM 控制寄存器 (SM_OFF_CONTROL) bit 定义 */
+#define SM_DIR_WRITE            0x00U   /* 主站写 → STM32 读               */
+#define SM_DIR_READ             0x01U   /* STM32 写 → 主站读               */
+#define SM_MODE_BUFFERED        0x00U   /* 缓冲模式 (过程数据 SM2/SM3)     */
+#define SM_MODE_MAILBOX         0x02U   /* 邮箱模式 (CoE SM0/SM1)          */
+
+/* ── SM 控制寄存器组合值 ── */
+#define SM_CTRL_M2S_MAILBOX     ((SM_MODE_MAILBOX << 1) | SM_DIR_WRITE)   /* 0x04 */
+#define SM_CTRL_S2M_MAILBOX     ((SM_MODE_MAILBOX << 1) | SM_DIR_READ)    /* 0x05 */
+#define SM_CTRL_M2S_BUFFERED    ((SM_MODE_BUFFERED << 1) | SM_DIR_WRITE)  /* 0x00 */
+#define SM_CTRL_S2M_BUFFERED    ((SM_MODE_BUFFERED << 1) | SM_DIR_READ)   /* 0x01 */
+
 /* --- 0x0900~0x09FF: 分布式时钟 (Distributed Clock) --- */
 #define ESC_REG_DC_BASE         0x0900U /* DC 配置起始                    */
 
@@ -147,6 +167,12 @@ HAL_StatusTypeDef ESC_WriteBlock(uint16_t addr, uint8_t *pData, uint16_t size);
 /* IRQ 状态 (每次 SPI 事务自动捕获) */
 void ESC_GetIRQStatus(uint8_t *irq0, uint8_t *irq1);
 
+/* SyncManager 配置 */
+void ESC_ReadSMConfig(uint8_t smIdx, uint16_t *pStartAddr, uint16_t *pLength,
+                      uint8_t *pControl, uint8_t *pStatus);
+void ESC_WriteSMConfig(uint8_t smIdx, uint16_t startAddr, uint16_t length,
+                       uint8_t control, uint8_t activate);
+
 /* ────────────────────────────────────────────────────────────────
  * 第3步: ESC 信息读取
  * ──────────────────────────────────────────────────────────────── */
@@ -155,14 +181,6 @@ void ESC_GetIRQStatus(uint8_t *irq0, uint8_t *irq1);
  *  @note  一次调用读齐所有身份/能力寄存器, 结果存入 g_escInfo
  *  @retval HAL_OK / HAL_ERROR */
 HAL_StatusTypeDef AX58100_ReadESCInfo(void);
-
-/* ────────────────────────────────────────────────────────────────
- * 第4步: 状态机 (占位, 待实现)
- * ──────────────────────────────────────────────────────────────── */
-
-HAL_StatusTypeDef AX58100_GetState(uint8_t *pState);
-HAL_StatusTypeDef AX58100_SetState(uint8_t state);
-HAL_StatusTypeDef AX58100_HandleStateMachine(void);
 
 /* ────────────────────────────────────────────────────────────────
  * 测试 / 诊断

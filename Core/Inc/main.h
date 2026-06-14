@@ -32,6 +32,7 @@ extern "C" {
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "AX58100.h"
+#include "app_ethercat.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
