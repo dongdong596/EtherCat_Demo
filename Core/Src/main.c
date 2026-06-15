@@ -125,10 +125,10 @@ int main(void)
      * ============================================================ */
 
     /* ---- 状态机 (正常运行时启用) ---- */
-    // ECAT_MainTask();
+    ECAT_MainTask();
 
     /* ---- 测试模式: 取消注释下面其中一行 ---- */
-    ECAT_SelfTest();              /* [T] 第4步自测: 返回 0 即通过 */
+    // ECAT_SelfTest();              /* [T] 第4步自测: 返回 0 即通过 */
     // AX58100_ReadESCInfo();      /* [1] 第3步: ESC 完整信息    */
     // ESC_TestReadID();           /* [2] 读 ESC 类型/版本       */
     // ESC_TestReadWrite();        /* [3] 读写用户 RAM           */
