@@ -514,6 +514,11 @@
               <FileType>1</FileType>
               <FilePath>..\App\Src\app_ethercat.c</FilePath>
             </File>
+            <File>
+              <FileName>app_coe.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\Src\app_coe.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

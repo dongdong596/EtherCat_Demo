@@ -121,6 +121,14 @@ extern "C" {
 #define SM_OFF_PDI_CTRL         0x07U   /* PDI 控制      (1B)             */
 
 /*
+ * SM 状态寄存器 (SM_OFF_STATUS) 位定义:
+ *   Bit [3]:  Mailbox/Buffer full —— 缓冲区有数据
+ *               邮箱模式 SM0(M→S): 1 = 主站写入了新命令, 待 PDI 读取
+ *               邮箱模式 SM1(S→M): 1 = PDI 写入的响应主站尚未取走
+ */
+#define SM_STATUS_MBX_FULL      (1U << 3) /* 邮箱满 / 缓冲区有数据         */
+
+/*
  * SM 控制寄存器 (SM_OFF_CONTROL) 位定义:
  *
  *   Bit [0]:    方向 (Direction)
@@ -155,7 +163,13 @@ extern "C" {
 #define SM_MODE_BUFFERED        0x00U
 #define SM_MODE_MAILBOX         0x02U
 
-/* ── 2.9  分布式时钟 DC (0x0900~0x09FF) ── */
+/* ── 2.9  看门狗 (0x0400~0x041F) ── */
+#define ESC_REG_WDG_DIVIDER     0x0400U /* 看门狗分频器 (2B, 默认 0x03E8)  */
+#define ESC_REG_WDG_PDI         0x0410U /* PDI 看门狗   (2B, 0=禁用)       */
+#define ESC_REG_WDG_SM          0x0420U /* SM 看门狗    (2B, 0=禁用)       */
+#define ESC_REG_WDG_EPU         0x0440U /* EPU 看门狗   (2B)               */
+
+/* ── 2.10 分布式时钟 DC (0x0900~0x09FF) ── */
 #define ESC_REG_DC_BASE         0x0900U /* DC 配置起始                    */
 
 /* ── 2.10 过程数据 RAM (0x1000~0x1FFF, AX58100 实际 9KB) ── */
@@ -320,6 +334,65 @@ HAL_StatusTypeDef AX58100_ReadESCInfo(void);
 void ESC_TestReadID(void);         /* 读 ESC 类型/版本, 验证通信         */
 void ESC_TestReadWrite(void);      /* 读写用户 RAM 区域, 验证 PDI 功能   */
 void ESC_Diagnose(void);           /* 诊断: 一口气读关键寄存器            */
+
+/* ================================================================
+ * §11 API: 看门狗 / 过程数据
+ * ================================================================ */
+
+void ESC_Watchdog_Config(void);         /* 禁用 PDI/SM 看门狗             */
+
+/**
+ * @brief  读主站输出数据 (SM2: M→S, MCU 读)
+ * @param  pBuf: 输出缓冲区
+ * @param  len:  读取字节数
+ */
+void ESC_ReadOutputData(uint8_t *pBuf, uint16_t len);
+
+/**
+ * @brief  写输入数据给主站 (SM3: S→M, MCU 写)
+ * @param  pBuf: 要写入的数据
+ * @param  len:  写入字节数
+ */
+void ESC_WriteInputData(uint8_t *pBuf, uint16_t len);
+
+/* ================================================================
+ * §12 API: 邮箱底层 (CoE 通信用, SM0/SM1)
+ *
+ *     SM0: 邮箱输出 (主→从) 0x1000  —— 主站写命令, MCU 读
+ *     SM1: 邮箱输入 (从→主) 0x1080  —— MCU 写响应, 主站读
+ *
+ *     语义: 读/写必须访问到 SM 区尾字节地址, ESC 才会翻转 full 标志.
+ * ================================================================ */
+
+/**
+ * @brief  查询 SM0 邮箱是否有主站发来的新命令
+ * @retval 1 = 有 (SM0 状态 bit3=1), 0 = 无
+ */
+uint8_t ESC_Mbx_RxFull(void);
+
+/**
+ * @brief  查询 SM1 邮箱响应是否仍未被主站取走
+ * @retval 1 = 满 (上次响应主站还没读), 0 = 空 (可写新响应)
+ */
+uint8_t ESC_Mbx_TxFull(void);
+
+/**
+ * @brief  从 SM0 读取主站邮箱命令
+ * @param  pBuf: 输出缓冲区
+ * @param  len:  缓冲区大小 (实际读 min(len, SM0 长度))
+ * @retval HAL_OK / HAL_ERROR
+ * @note   读到 SM0 区尾, ESC 自动清 full 标志, 准备接收下一条命令
+ */
+HAL_StatusTypeDef ESC_Mbx_Read(uint8_t *pBuf, uint16_t len);
+
+/**
+ * @brief  向 SM1 写入邮箱响应
+ * @param  pBuf: 要写入的响应数据
+ * @param  len:  数据长度 (写 min(len, SM1 长度))
+ * @retval HAL_OK / HAL_ERROR
+ * @note   写到 SM1 区尾, ESC 置 full 标志, 通知主站取走
+ */
+HAL_StatusTypeDef ESC_Mbx_Write(uint8_t *pBuf, uint16_t len);
 
 #ifdef __cplusplus
 }

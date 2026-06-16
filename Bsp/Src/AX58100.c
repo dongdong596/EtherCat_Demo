@@ -533,3 +533,125 @@ void ESC_Diagnose(void)
 
     __NOP();    /* 断点: 观察上面所有变量 */
 }
+
+/* ================================================================
+ * §F  看门狗 / 过程数据
+ * ================================================================ */
+
+/**
+ * @brief  禁用 PDI/SM 看门狗, 防止开发阶段 ESC 异常复位
+ * @note   PDI 看门狗 = 0 (禁用)
+ *         SM 看门狗  = 0 (禁用)
+ *         上电后立即调用一次即可
+ */
+void ESC_Watchdog_Config(void)
+{
+    /* 禁用 PDI 看门狗 (0x0410 = 0) */
+    ESC_WriteRegister(ESC_REG_WDG_PDI,     0x00);
+    ESC_WriteRegister(ESC_REG_WDG_PDI + 1, 0x00);
+
+    /* 禁用 SM 看门狗 (0x0420 = 0) */
+    ESC_WriteRegister(ESC_REG_WDG_SM,      0x00);
+    ESC_WriteRegister(ESC_REG_WDG_SM + 1,  0x00);
+}
+
+/**
+ * @brief  读主站输出数据 (SM2: M→S, MCU 从 SM2 缓冲区读取)
+ * @param  pBuf: 输出缓冲区
+ * @param  len:  读取字节数
+ * @note   读 SM2 当前地址, 再块读数据
+ */
+void ESC_ReadOutputData(uint8_t *pBuf, uint16_t len)
+{
+    ESC_SM_Config_t sm2;
+    uint16_t rdLen;
+
+    if (len == 0 || pBuf == NULL) return;
+
+    ESC_SM_ReadConfig(2, &sm2);
+    if (sm2.length == 0 || sm2.startAddr == 0) return;
+
+    rdLen = (len < sm2.length) ? len : sm2.length;
+    ESC_ReadBlock(sm2.startAddr, pBuf, rdLen);
+}
+
+/**
+ * @brief  写输入数据给主站 (SM3: S→M, MCU 向 SM3 缓冲区写入)
+ * @param  pBuf: 要写入的数据
+ * @param  len:  写入字节数
+ * @note   读 SM3 当前地址, 再块写数据
+ */
+void ESC_WriteInputData(uint8_t *pBuf, uint16_t len)
+{
+    ESC_SM_Config_t sm3;
+    uint16_t wrLen;
+
+    if (len == 0 || pBuf == NULL) return;
+
+    ESC_SM_ReadConfig(3, &sm3);
+    if (sm3.length == 0 || sm3.startAddr == 0) return;
+
+    wrLen = (len < sm3.length) ? len : sm3.length;
+    ESC_WriteBlock(sm3.startAddr, pBuf, wrLen);
+}
+
+/* ================================================================
+ * §G  邮箱底层 (CoE 通信用, SM0/SM1)
+ *
+ *     SM0: 邮箱输出 (主→从) 0x1000 128B —— 主站写命令, MCU 读
+ *     SM1: 邮箱输入 (从→主) 0x1080 128B —— MCU 写响应, 主站读
+ *
+ *     full 标志在 SM 状态寄存器 (SM_OFF_STATUS) 的 bit3:
+ *       - 读邮箱时必须访问到 SM 区末字节, ESC 才清 full (允许收下一条)
+ *       - 写邮箱时必须写到 SM 区末字节, ESC 才置 full (通知主站取走)
+ * ================================================================ */
+
+/**
+ * @brief  读某个 SM 通道的状态寄存器 bit3 (邮箱满标志)
+ */
+static uint8_t ESC_SM_MbxFull(uint8_t smIdx)
+{
+    uint16_t smBase = ESC_REG_SM_BASE + (uint16_t)smIdx * ESC_REG_SM_STRIDE;
+    uint8_t  status = 0;
+
+    if (ESC_ReadRegister(smBase + SM_OFF_STATUS, &status) != HAL_OK) return 0;
+    return (status & SM_STATUS_MBX_FULL) ? 1 : 0;
+}
+
+uint8_t ESC_Mbx_RxFull(void)
+{
+    return ESC_SM_MbxFull(0);   /* SM0: 主站是否写了新命令 */
+}
+
+uint8_t ESC_Mbx_TxFull(void)
+{
+    return ESC_SM_MbxFull(1);   /* SM1: 上次响应是否还没被取走 */
+}
+
+HAL_StatusTypeDef ESC_Mbx_Read(uint8_t *pBuf, uint16_t len)
+{
+    uint16_t rdLen;
+
+    if (pBuf == NULL || len == 0) return HAL_ERROR;
+
+    /* 整个 SM0 区一次读完 (读到末字节才会清 full) */
+    rdLen = (len < SM0_DEFAULT_LEN) ? SM0_DEFAULT_LEN : len;
+    if (rdLen > ESC_MAX_BLOCK_SIZE) rdLen = ESC_MAX_BLOCK_SIZE;
+
+    return ESC_ReadBlock(SM0_DEFAULT_ADDR, pBuf, rdLen);
+}
+
+HAL_StatusTypeDef ESC_Mbx_Write(uint8_t *pBuf, uint16_t len)
+{
+    static uint8_t txbuf[SM1_DEFAULT_LEN];
+    uint16_t i;
+
+    if (pBuf == NULL || len == 0 || len > SM1_DEFAULT_LEN) return HAL_ERROR;
+
+    /* 必须写满整个 SM1 区, 写到末字节 ESC 才会置 full 通知主站.
+     * 有效数据放前 len 字节, 其余补 0. */
+    for (i = 0; i < len; i++)            txbuf[i] = pBuf[i];
+    for (i = len; i < SM1_DEFAULT_LEN; i++) txbuf[i] = 0x00;
+
+    return ESC_WriteBlock(SM1_DEFAULT_ADDR, txbuf, SM1_DEFAULT_LEN);
+}

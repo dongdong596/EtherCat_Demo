@@ -22,6 +22,7 @@
 #include "gpio.h"
 #include "AX58100.h"
 #include "app_ethercat.h"
+#include "app_coe.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -98,6 +99,12 @@ int main(void)
   /* 初始化 EtherCAT 状态机, 写 AL Status = Init */
   ECAT_Init();
 
+  /* 初始化 CoE 协议栈 (对象字典) */
+  CoE_Init();
+
+  /* 禁用 ESC 看门狗, 防止开发阶段异常复位 */
+  ESC_Watchdog_Config();
+
   __NOP();    /* 断点: 观察 g_escInfo + ECAT_GetState() */
   /* USER CODE END 2 */
 
@@ -126,6 +133,12 @@ int main(void)
 
     /* ---- 状态机 (正常运行时启用) ---- */
     ECAT_MainTask();
+
+    /* ---- CoE 邮箱通信 (PREOP/SAFEOP/OP 态处理 SDO) ---- */
+    CoE_MainTask();
+
+    /* ---- 过程数据交换 (OP 态下激活) ---- */
+    ECAT_ProcessDataExchange();
 
     /* ---- 测试模式: 取消注释下面其中一行 ---- */
     // ECAT_SelfTest();              /* [T] 第4步自测: 返回 0 即通过 */
