@@ -30,6 +30,19 @@ volatile uint8_t g_dbg_alStatus = 0;  /* 最近一次写入 AL Status [7:0]     
 volatile uint8_t g_dbg_callCnt  = 0;  /* ECAT_MainTask 调用次数 (溢出回绕)      */
 volatile uint8_t g_dbg_pdiErr   = 0;  /* PDI 错误计数 (0x030D)                  */
 
+/* SM0 邮箱诊断: 主站实际配了什么 */
+volatile uint16_t g_dbg_sm0Addr   = 0;  /* SM0 实际物理起始地址                 */
+volatile uint16_t g_dbg_sm0Len    = 0;  /* SM0 实际长度                          */
+volatile uint8_t  g_dbg_sm0Ctrl   = 0;  /* SM0 控制寄存器 (bit0=方向 bit[2:1]=模式) */
+volatile uint8_t  g_dbg_sm0Status = 0;  /* SM0 状态寄存器 (bit3=邮箱满)          */
+volatile uint8_t  g_dbg_sm0Active = 0;  /* SM0 激活 (1=启用)                     */
+
+/* SM1 邮箱诊断 */
+volatile uint16_t g_dbg_sm1Addr   = 0;
+volatile uint8_t  g_dbg_sm1Ctrl   = 0;
+volatile uint8_t  g_dbg_sm1Status = 0;
+volatile uint8_t  g_dbg_sm1Active = 0;
+
 /* 过程数据缓冲区 (SM2 输出 主→从, SM3 输入 从→主) */
 static uint8_t m_pdOutput[32] = {0};  /* SM2: 主站发来的数据 */
 static uint8_t m_pdInput[32]  = {0};  /* SM3: 发给主站的数据 */
@@ -104,11 +117,11 @@ static uint8_t _ECAT_DoTransition(uint8_t requestedState, uint8_t ackBit)
 {
     uint8_t statusLo;
 
-    /* 状态没变: 仍须回应 ACK 握手 (主站可能重复请求确认) */
+    /* 状态没变: 回应当前状态 */
     if (requestedState == m_currentState)
     {
         statusLo = m_currentState;
-        if (ackBit) statusLo |= 0x10;  /* Response 位 = ACK 位 */
+        /* 不设 Response, TwinCAT 只要纯状态 */
 
         g_dbg_alStatus = statusLo;
         ESC_WriteRegister(ESC_REG_AL_STATUS,      statusLo);
@@ -119,10 +132,9 @@ static uint8_t _ECAT_DoTransition(uint8_t requestedState, uint8_t ackBit)
     /* 验证合法性 */
     if (!IsValidTransition(m_currentState, requestedState))
     {
-        m_alError = 0x0011;  /* Invalid state change requested */
-        /* AL Status: 保持当前状态 + Response 回应 + Error 标记 */
-        statusLo = m_currentState | 0x20;  /* bit5 = Error */
-        if (ackBit) statusLo |= 0x10;       /* bit4 = Response */
+        m_alError = 0x0011;
+        statusLo = m_currentState | 0x20;
+        /* 不设 Response, TwinCAT 只要纯状态 */
         ESC_WriteRegister(ESC_REG_AL_STATUS,      statusLo);
         ESC_WriteRegister(ESC_REG_AL_STATUS + 1,  0x00);
         ESC_WriteRegister(ESC_REG_AL_STATUS_CODE, (uint8_t)(m_alError & 0xFF));
@@ -136,11 +148,11 @@ static uint8_t _ECAT_DoTransition(uint8_t requestedState, uint8_t ackBit)
     m_currentState = requestedState;
     m_alError      = AL_STATUS_NO_ERROR;
 
-    /* 写硬件 AL Status: 当前状态 + Response 位镜像 ACK */
+    /* Round 1: 写 AL Status, 镜像 ACK 位 */
     statusLo = m_currentState;
-    if (ackBit) statusLo |= 0x10;  /* Response 位 = ACK 位, 完成握手 */
+    if (ackBit) statusLo |= 0x10;
 
-    g_dbg_alStatus = statusLo;  /* 调试: 记录写入 AL Status 的值 */
+    g_dbg_alStatus = statusLo;
     ESC_WriteRegister(ESC_REG_AL_STATUS,      statusLo);
     ESC_WriteRegister(ESC_REG_AL_STATUS + 1,  0x00);
     ESC_WriteRegister(ESC_REG_AL_STATUS_CODE, 0x00);
@@ -167,27 +179,35 @@ void ECAT_Init(void)
 uint8_t ECAT_MainTask(void)
 {
     uint8_t alCtrlLo, alCtrlHi, requestedState, ackBit, errAckBit;
+    static uint8_t s_smDiagDone = 0;
 
     /* 读 AL Control (0x0120, 主站通过网线写, PDI 只读) */
     if (ESC_ReadRegister(ESC_REG_AL_CONTROL,     &alCtrlLo) != HAL_OK) return m_currentState;
     if (ESC_ReadRegister(ESC_REG_AL_CONTROL + 1, &alCtrlHi) != HAL_OK) return m_currentState;
 
-    requestedState = alCtrlLo & 0x0F;   /* 目标状态  (bits 3:0) */
-    ackBit         = alCtrlLo & 0x10;   /* ACK 握手位 (bit  4)  */
-    errAckBit      = alCtrlLo & 0x20;   /* Error ACK  (bit  5)  */
+    requestedState = alCtrlLo & 0x0F;
+    ackBit         = alCtrlLo & 0x10;
+    errAckBit      = alCtrlLo & 0x20;
 
-    /* 更新调试变量 */
     g_dbg_alCtrlLo = alCtrlLo;
     g_dbg_alCtrlHi = alCtrlHi;
     g_dbg_callCnt++;
 
-    /* 主站清除错误: 写 Error ACK → 从站复位错误标志 */
+    /* 诊断: 首次进 PREOP 后回读 SM 配置 */
+    if (!s_smDiagDone && (m_currentState == ESC_STATE_PREOP ||
+                          m_currentState == ESC_STATE_SAFEOP ||
+                          m_currentState == ESC_STATE_OP))
+    {
+        ECAT_DiagReadSM();
+        s_smDiagDone = 1;
+    }
+
+    /* 主站清除错误 */
     if (errAckBit && m_alError != AL_STATUS_NO_ERROR)
     {
         m_alError = AL_STATUS_NO_ERROR;
-        /* AL Status 去掉 Error 位但保持当前状态 */
         uint8_t statusLo = m_currentState;
-        if (ackBit) statusLo |= 0x10;
+        /* 不设 Response, TwinCAT 只要纯状态 */
         g_dbg_alStatus = statusLo;
         ESC_WriteRegister(ESC_REG_AL_STATUS,      statusLo);
         ESC_WriteRegister(ESC_REG_AL_STATUS + 1,  0x00);
@@ -196,14 +216,14 @@ uint8_t ECAT_MainTask(void)
         return m_currentState;
     }
 
-    /* 过滤无效状态请求 (上电后主站尚未写入, AL Control 可能为 0) */
+    /* 过滤无效状态 */
     if (requestedState != ESC_STATE_INIT  &&
         requestedState != ESC_STATE_PREOP &&
         requestedState != ESC_STATE_BOOT  &&
         requestedState != ESC_STATE_SAFEOP &&
         requestedState != ESC_STATE_OP)
     {
-        return m_currentState;  /* 忽略, 不报错 */
+        return m_currentState;
     }
 
     return _ECAT_DoTransition(requestedState, ackBit);
@@ -214,13 +234,24 @@ uint8_t ECAT_GetState(void)
     return m_currentState;
 }
 
-/**
- * @brief  自测: 手动模拟主站切状态 (不需要网线)
- * @note   直接调用 _ECAT_DoTransition, 不通过 AL Control 寄存器
- *         AL Control (0x0120) 只能由主站通过网线写入, PDI 写不进去
- * @retval 0 = 全部通过, bit[7:0] 标记哪个跳转的软件状态不对,
- *         bit[15:8] 标记哪个跳转的硬件 AL Status 寄存器不对
- */
+void ECAT_DiagReadSM(void)
+{
+    ESC_SM_Config_t cfg;
+
+    ESC_SM_ReadConfig(0, &cfg);
+    g_dbg_sm0Addr   = cfg.startAddr;
+    g_dbg_sm0Len    = cfg.length;
+    g_dbg_sm0Ctrl   = cfg.control;
+    g_dbg_sm0Status = cfg.status;
+    g_dbg_sm0Active = cfg.activate;
+
+    ESC_SM_ReadConfig(1, &cfg);
+    g_dbg_sm1Addr   = cfg.startAddr;
+    g_dbg_sm1Ctrl   = cfg.control;
+    g_dbg_sm1Status = cfg.status;
+    g_dbg_sm1Active = cfg.activate;
+}
+
 uint8_t ECAT_SelfTest(void)
 {
     uint8_t errors = 0;
@@ -236,51 +267,34 @@ uint8_t ECAT_SelfTest(void)
         ESC_STATE_INIT,
     };
 
-    /* 从 Init 开始 */
     ECAT_Init();
     if (ECAT_GetState() != ESC_STATE_INIT) return 0xFF;
 
     for (i = 0; i < sizeof(testSeq); i++)
     {
-        /* 直接调核心跳转逻辑 (跳过 AL Control 寄存器读写, 模拟 ACK=1) */
         _ECAT_DoTransition(testSeq[i], 0x10);
 
-        /* 检查软件状态 */
         state = ECAT_GetState();
         if (state != testSeq[i]) errors |= (1 << i);
 
-        /* 检查 ESC 硬件 AL Status 寄存器也更新了 */
         uint8_t hwState = 0;
         ESC_ReadRegister(ESC_REG_AL_STATUS, &hwState);
         if ((hwState & 0x0F) != testSeq[i]) errors |= (1 << (i + 8));
     }
 
-    /* 恢复 Init */
     ECAT_Init();
-
-    return errors;  /* 0 = 全部通过 */
+    return errors;
 }
 
 /* ================================================================
  * 过程数据交换 (OP 状态每周期调用)
  * ================================================================ */
 
-/**
- * @brief  过程数据交换 — OP 状态下每周期执行一次
- * @note   1. 读 SM2 输出区 → m_pdOutput (主站发给从站的数据)
- *         2. 写 SM3 输入区 ← m_pdInput  (从站发给主站的数据)
- *         3. 更新 m_pdInput[0] 为递增值, 便于主站侧观察是否存活
- */
 void ECAT_ProcessDataExchange(void)
 {
     if (m_currentState != ESC_STATE_OP) return;
 
-    /* 读主站输出 (SM2: M→S) */
     ESC_ReadOutputData(m_pdOutput, sizeof(m_pdOutput));
-
-    /* 递增计数器, 主站可观察此值确认数据刷新 */
     m_pdInput[0]++;
-
-    /* 写输入数据给主站 (SM3: S→M) */
     ESC_WriteInputData(m_pdInput, sizeof(m_pdInput));
 }

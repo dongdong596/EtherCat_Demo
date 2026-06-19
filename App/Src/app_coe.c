@@ -26,6 +26,9 @@
 /* 调试变量 — Watch 窗口观察 CoE 通信状态 */
 volatile uint8_t g_dbg_coe_rxCnt   = 0;  /* CoE_MainTask 收到邮箱数据的次数   */
 volatile uint8_t g_dbg_coe_procCnt = 0;  /* 成功处理 SDO 请求的次数          */
+volatile uint8_t g_dbg_sm0RawSts   = 0;  /* SM0 状态寄存器原始值 (每周期更新) */
+volatile uint8_t g_dbg_coe_state   = 0;  /* 0=无事件 1=有事件但非CoE 2=非SDO 3=已处理 */
+volatile uint8_t g_dbg_txbuf[16]   = {0}; /* SDO 响应帧调试: Memory窗口直接查看 */
 
 /* ================================================================
  * §1  对象字典存储区
@@ -245,6 +248,9 @@ static void SDO_HandleUpload(uint16_t index, uint8_t subindex)
     uint16_t timeout = 1000;
     while (ESC_Mbx_TxFull() && timeout--) { HAL_Delay(1); }
 
+    /* 调试: 拷贝到全局变量方便 Memory 窗口查看 */
+    memcpy((void*)g_dbg_txbuf, txBuf, 16);
+
     /* 发送 */
     ESC_Mbx_Write(txBuf, sizeof(MBX_Header_t) + dataLen);
 }
@@ -338,21 +344,62 @@ void CoE_Init(void)
 {
     /* 目前对象字典是静态初始化, 无需额外操作 */
     /* 未来可在此处注册回调函数或初始化动态对象 */
+    volatile uint8_t test_mbx = sizeof(MBX_Header_t); // 应该是 6
+    volatile uint8_t test_coe = sizeof(CoE_Header_t); // 应该是 2
+    volatile uint8_t test_sdo = sizeof(SDO_Header_t); // 应该是 8
+    __NOP();                                          // 断点设这里
 }
 
 uint8_t CoE_MainTask(void)
 {
     uint8_t rxBuf[128];
 
+    /* ── 强行确保 SM0/SM1 已配: TwinCAT 可能清零, 固件自己补上 ── */
+    {
+        uint8_t sm0Act = 0;
+        uint16_t sm0Base = ESC_REG_SM_BASE + 0 * ESC_REG_SM_STRIDE;
+        ESC_ReadRegister(sm0Base + SM_OFF_ACTIVATE, &sm0Act);
+        if (sm0Act == 0)
+        {
+            /* 只配 SM0+SM1, 不动 SM2/SM3 (TwinCAT 管过程数据) */
+            ESC_SM_Config_t cfg;
+            cfg.startAddr = SM0_DEFAULT_ADDR;
+            cfg.length    = SM0_DEFAULT_LEN;
+            cfg.control   = SM0_DEFAULT_CTRL;
+            cfg.activate  = 1;
+            cfg.pdiCtrl   = 0;
+            ESC_SM_Config(0, &cfg);
+
+            cfg.startAddr = SM1_DEFAULT_ADDR;
+            cfg.length    = SM1_DEFAULT_LEN;
+            cfg.control   = SM1_DEFAULT_CTRL;
+            cfg.activate  = 1;
+            cfg.pdiCtrl   = 0;
+            ESC_SM_Config(1, &cfg);
+        }
+    }
+
+    /* ── 诊断: 每周期读取 SM0 原始状态 (观察主站是否配了 SM0) ── */
+    {
+        uint16_t smBase = ESC_REG_SM_BASE + 0 * ESC_REG_SM_STRIDE;
+        uint8_t sts = 0;
+        if (ESC_ReadRegister(smBase + SM_OFF_STATUS, &sts) == HAL_OK)
+        {
+            g_dbg_sm0RawSts = sts;   /* 0x0805 寄存器原始值, 含 bit3=full */
+        }
+    }
+
     /* 检查邮箱是否有新消息 */
     if (!ESC_Mbx_RxFull())
     {
+        g_dbg_coe_state = 0;  /* 无事件 */
         return 0;  /* 无事件 */
     }
 
     /* 读取邮箱 */
     if (ESC_Mbx_Read(rxBuf, sizeof(rxBuf)) != HAL_OK)
     {
+        g_dbg_coe_state = 0;
         return 0;
     }
 
@@ -364,6 +411,7 @@ uint8_t CoE_MainTask(void)
     /* 只处理 CoE 类型 */
     if (pMbxHdr->type != MBX_TYPE_COE)
     {
+        g_dbg_coe_state = 1;  /* 有事件但非 CoE */
         return 0;
     }
 
@@ -373,6 +421,7 @@ uint8_t CoE_MainTask(void)
     /* 只处理 SDO 请求 */
     if (pCoEHdr->service != COE_SERVICE_SDO_REQUEST)
     {
+        g_dbg_coe_state = 2;  /* 非 SDO */
         return 0;
     }
 
@@ -400,6 +449,7 @@ uint8_t CoE_MainTask(void)
     }
 
     g_dbg_coe_procCnt++;  /* 调试: 成功处理了一次 SDO 请求 */
+    g_dbg_coe_state = 3;  /* 已处理 SDO */
     return 1;  /* 处理了一次请求 */
 }
 

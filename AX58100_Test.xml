@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║  AX58100_Test.xml — ESI 从站描述文件                             ║
+  ║                                                                  ║
+  ║  用途: 加载到 TwinCAT / EtherCAT 主站, 让主站认识此从站          ║
+  ║  匹配: app_coe.c / app_ethercat.c / AX58100.c                    ║
+  ║  日期: 2026-06-18                                                ║
+  ║                                                                  ║
+  ║  TwinCAT 加载路径:                                                ║
+  ║    C:\TwinCAT\3.1\Config\Io\EtherCAT\                            ║
+  ║    复制此文件后, 在 TwinCAT 中执行 Reload Device Descriptions     ║
+  ╚══════════════════════════════════════════════════════════════════╝
+-->
+<EtherCATInfo Version="1.1">
+  <!-- ════════════════════════════════════════════════════════════
+       §1  厂商信息
+       ════════════════════════════════════════════════════════════ -->
+  <Vendor>
+    <Id>1430</Id><!-- 0x00000596 -->
+    <Name>AX58100_Test Vendor</Name>
+  </Vendor>
+
+  <Descriptions>
+    <!-- ════════════════════════════════════════════════════════════
+         §2  设备分类
+         ════════════════════════════════════════════════════════════ -->
+    <Groups>
+      <Group SortOrder="100">
+        <Type>AX58100_Test</Type>
+        <Name>AX58100 测试从站</Name>
+      </Group>
+    </Groups>
+
+    <!-- ════════════════════════════════════════════════════════════
+         §3  设备定义
+         ════════════════════════════════════════════════════════════ -->
+    <Devices>
+      <Device Physics="YY">
+        <!-- ── 身份匹配 (与固件 OD 0x1018 完全一致) ── -->
+        <Type ProductCode="#x58100000" RevisionNo="#x00020111">AX58100_Test</Type>
+        <Name>AX58100 EtherCAT 测试从站</Name>
+
+        <!-- ════════════════════════════════════════════════════════
+             §3.1  SyncManager 配置
+                  (与 AX58100.c ESC_SM_Init() 完全一致)
+             ════════════════════════════════════════════════════════ -->
+        <Sm DefaultSize="128" StartAddress="#x1000" ControlByte="#x04" Enable="1">
+          <!-- SM0: 邮箱输出 (主→从)  mode=10(邮箱) dir=0(M→S) -->
+          <Name>MbxOut</Name>
+        </Sm>
+        <Sm DefaultSize="128" StartAddress="#x1080" ControlByte="#x05" Enable="1">
+          <!-- SM1: 邮箱输入 (从→主)  mode=10(邮箱) dir=1(S→M) -->
+          <Name>MbxIn</Name>
+        </Sm>
+        <Sm DefaultSize="32"  StartAddress="#x1100" ControlByte="#x00" Enable="1">
+          <!-- SM2: 过程数据输出 (主→从)  mode=00(缓冲) dir=0(M→S) -->
+          <Name>RxPDO</Name>
+        </Sm>
+        <Sm DefaultSize="32"  StartAddress="#x1120" ControlByte="#x01" Enable="1">
+          <!-- SM3: 过程数据输入 (从→主)  mode=00(缓冲) dir=1(S→M) -->
+          <Name>TxPDO</Name>
+        </Sm>
+
+        <!-- ════════════════════════════════════════════════════════
+             §3.2  邮箱配置 (CoE)
+             ════════════════════════════════════════════════════════ -->
+        <Mailbox DataLinkLayer="true">
+          <CoE SdoInfo="false"/>
+        </Mailbox>
+
+      </Device>
+    </Devices>
+  </Descriptions>
+</EtherCATInfo>

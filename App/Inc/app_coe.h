@@ -166,7 +166,16 @@ typedef struct {
 #define OD_ACCESS_RW        'b'     /* 读写 (both) */
 
 /* ================================================================
- * §5  CoE 主任务 API
+ * §5  调试变量 (Watch 窗口观察)
+ * ================================================================ */
+
+extern volatile uint8_t g_dbg_coe_rxCnt;   /* CoE_MainTask 收到邮箱数据的次数   */
+extern volatile uint8_t g_dbg_coe_procCnt; /* 成功处理 SDO 请求的次数          */
+extern volatile uint8_t g_dbg_sm0RawSts;   /* SM0 状态寄存器原始值 (每周期更新) */
+extern volatile uint8_t g_dbg_coe_state;   /* 0=无事件 1=有事件但非CoE 2=非SDO 3=已处理 */
+
+/* ================================================================
+ * §6  CoE 主任务 API
  * ================================================================ */
 
 /**

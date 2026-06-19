@@ -169,6 +169,11 @@ extern "C" {
 #define ESC_REG_WDG_SM          0x0420U /* SM 看门狗    (2B, 0=禁用)       */
 #define ESC_REG_WDG_EPU         0x0440U /* EPU 看门狗   (2B)               */
 
+/* ── 2.9b EEPROM/SII 接口 (0x0500~0x050F) ── */
+#define ESC_REG_EEPROM_CTRL     0x0500U /* EEPROM 控制/状态 (2B)          */
+#define ESC_REG_EEPROM_ADDR     0x0502U /* EEPROM 地址       (2B)         */
+#define ESC_REG_EEPROM_DATA     0x0504U /* EEPROM 数据       (4B)         */
+
 /* ── 2.10 分布式时钟 DC (0x0900~0x09FF) ── */
 #define ESC_REG_DC_BASE         0x0900U /* DC 配置起始                    */
 
@@ -339,6 +344,7 @@ void ESC_Diagnose(void);           /* 诊断: 一口气读关键寄存器       
  * §11 API: 看门狗 / 过程数据
  * ================================================================ */
 
+void AX58100_WriteIdentity(void);        /* 写固定身份到 ESC (无 EEPROM)    */
 void ESC_Watchdog_Config(void);         /* 禁用 PDI/SM 看门狗             */
 
 /**

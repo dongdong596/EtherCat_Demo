@@ -95,6 +95,7 @@ int main(void)
   /* 上电后读取 ESC 完整信息, 结果存入 g_escInfo 结构体
    * 设断点在下一行, Watch 窗口展开 g_escInfo 查看所有字段 */
   AX58100_ReadESCInfo();
+  // AX58100_WriteIdentity();      /* TODO: EEPROM写暂不启用, 可能干扰ESC */
 
   /* 初始化 EtherCAT 状态机, 写 AL Status = Init */
   ECAT_Init();
@@ -131,10 +132,11 @@ int main(void)
      * [6] SPI_SendTestPattern():   波形测试 - 示波器观察
      * ============================================================ */
 
-    /* ---- 状态机 (正常运行时启用) ---- */
+    /* ---- 状态机: 两次处理 ACK 握手 ---- */
+    ECAT_MainTask();
     ECAT_MainTask();
 
-    /* ---- CoE 邮箱通信 (PREOP/SAFEOP/OP 态处理 SDO) ---- */
+    /* ---- CoE 邮箱通信 ---- */
     CoE_MainTask();
 
     /* ---- 过程数据交换 (OP 态下激活) ---- */
@@ -149,7 +151,7 @@ int main(void)
     // SPI_LoopbackTest();         /* [5] 自环回                 */
     // SPI_SendTestPattern();      /* [6] 发送波形               */
 
-    HAL_Delay(10);                /* 状态机 10ms 周期 */
+    HAL_Delay(5);                 /* 5ms 周期: 给 TwinCAT 足够时间配 SM */
   }
   /* USER CODE END 3 */
 }

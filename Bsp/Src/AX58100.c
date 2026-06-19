@@ -406,6 +406,69 @@ HAL_StatusTypeDef AX58100_ReadESCInfo(void)
 }
 
 /* ================================================================
+ * 往 ESC 写入固定身份 (解决无 EEPROM 时 ID 随机的问题)
+ * SII 布局: word 8-9=VendorID, 10-11=ProductCode,
+ *           12-13=Revision, 14-15=SerialNumber
+ * ================================================================ */
+void AX58100_WriteIdentity(void)
+{
+    uint16_t wordAddr;
+    uint8_t  buf[4];
+
+    /* --- Vendor ID (SII word 8-9) --- */
+    wordAddr = 8;
+    buf[0] = (uint8_t)(0x00000596UL & 0xFF);        /* 小端序 */
+    buf[1] = (uint8_t)((0x00000596UL >> 8) & 0xFF);
+    buf[2] = (uint8_t)((0x00000596UL >> 16) & 0xFF);
+    buf[3] = (uint8_t)((0x00000596UL >> 24) & 0xFF);
+    ESC_WriteRegister(ESC_REG_EEPROM_ADDR,     (uint8_t)(wordAddr & 0xFF));
+    ESC_WriteRegister(ESC_REG_EEPROM_ADDR + 1, (uint8_t)(wordAddr >> 8));
+    ESC_WriteBlock(ESC_REG_EEPROM_DATA, buf, 4);
+    ESC_WriteRegister(ESC_REG_EEPROM_CTRL, 0x04);  /* Write command */
+
+    HAL_Delay(10);  /* 等 ESC 完成写入 */
+
+    /* --- Product Code (SII word 10-11) --- */
+    wordAddr = 10;
+    buf[0] = (uint8_t)(0x58100000UL & 0xFF);
+    buf[1] = (uint8_t)((0x58100000UL >> 8) & 0xFF);
+    buf[2] = (uint8_t)((0x58100000UL >> 16) & 0xFF);
+    buf[3] = (uint8_t)((0x58100000UL >> 24) & 0xFF);
+    ESC_WriteRegister(ESC_REG_EEPROM_ADDR,     (uint8_t)(wordAddr & 0xFF));
+    ESC_WriteRegister(ESC_REG_EEPROM_ADDR + 1, (uint8_t)(wordAddr >> 8));
+    ESC_WriteBlock(ESC_REG_EEPROM_DATA, buf, 4);
+    ESC_WriteRegister(ESC_REG_EEPROM_CTRL, 0x04);
+
+    HAL_Delay(10);
+
+    /* --- Revision (SII word 12-13) --- */
+    wordAddr = 12;
+    buf[0] = (uint8_t)(0x00010000UL & 0xFF);
+    buf[1] = (uint8_t)((0x00010000UL >> 8) & 0xFF);
+    buf[2] = (uint8_t)((0x00010000UL >> 16) & 0xFF);
+    buf[3] = (uint8_t)((0x00010000UL >> 24) & 0xFF);
+    ESC_WriteRegister(ESC_REG_EEPROM_ADDR,     (uint8_t)(wordAddr & 0xFF));
+    ESC_WriteRegister(ESC_REG_EEPROM_ADDR + 1, (uint8_t)(wordAddr >> 8));
+    ESC_WriteBlock(ESC_REG_EEPROM_DATA, buf, 4);
+    ESC_WriteRegister(ESC_REG_EEPROM_CTRL, 0x04);
+
+    HAL_Delay(10);
+
+    /* --- Serial Number (SII word 14-15) --- */
+    wordAddr = 14;
+    buf[0] = (uint8_t)(0x00000001UL & 0xFF);
+    buf[1] = (uint8_t)((0x00000001UL >> 8) & 0xFF);
+    buf[2] = (uint8_t)((0x00000001UL >> 16) & 0xFF);
+    buf[3] = (uint8_t)((0x00000001UL >> 24) & 0xFF);
+    ESC_WriteRegister(ESC_REG_EEPROM_ADDR,     (uint8_t)(wordAddr & 0xFF));
+    ESC_WriteRegister(ESC_REG_EEPROM_ADDR + 1, (uint8_t)(wordAddr >> 8));
+    ESC_WriteBlock(ESC_REG_EEPROM_DATA, buf, 4);
+    ESC_WriteRegister(ESC_REG_EEPROM_CTRL, 0x04);
+
+    __NOP();  /* 断点: 验证写入 */
+}
+
+/* ================================================================
  * §E  测试 / 诊断
  * ================================================================ */
 
@@ -604,6 +667,9 @@ void ESC_WriteInputData(uint8_t *pBuf, uint16_t len)
  *     full 标志在 SM 状态寄存器 (SM_OFF_STATUS) 的 bit3:
  *       - 读邮箱时必须访问到 SM 区末字节, ESC 才清 full (允许收下一条)
  *       - 写邮箱时必须写到 SM 区末字节, ESC 才置 full (通知主站取走)
+ *
+ *     重要: SM 配置可能被主站覆写 (来自 EEPROM SII / ESI/XML),
+ *           所以地址不能硬编码, 必须先读 SM 寄存器获取实际地址.
  * ================================================================ */
 
 /**
@@ -618,40 +684,106 @@ static uint8_t ESC_SM_MbxFull(uint8_t smIdx)
     return (status & SM_STATUS_MBX_FULL) ? 1 : 0;
 }
 
+/**
+ * @brief  获取 SM0 实际物理地址和长度 (读出主站配置)
+ * @note   使用前必须先检查返回值, 全 0 表示未配置
+ */
+static void ESC_Mbx_GetSM0Info(uint16_t *pAddr, uint16_t *pLen)
+{
+    uint8_t buf[4];  /* startAddr(2B) + length(2B) */
+    if (ESC_ReadBlock(ESC_REG_SM_BASE + 0 * ESC_REG_SM_STRIDE, buf, 4) == HAL_OK)
+    {
+        *pAddr = (uint16_t)buf[0] | ((uint16_t)buf[1] << 8);
+        *pLen  = (uint16_t)buf[2] | ((uint16_t)buf[3] << 8);
+    }
+    else
+    {
+        *pAddr = 0;
+        *pLen  = 0;
+    }
+}
+
+static void ESC_Mbx_GetSM1Info(uint16_t *pAddr, uint16_t *pLen)
+{
+    uint8_t buf[4];
+    if (ESC_ReadBlock(ESC_REG_SM_BASE + 1 * ESC_REG_SM_STRIDE, buf, 4) == HAL_OK)
+    {
+        *pAddr = (uint16_t)buf[0] | ((uint16_t)buf[1] << 8);
+        *pLen  = (uint16_t)buf[2] | ((uint16_t)buf[3] << 8);
+    }
+    else
+    {
+        *pAddr = 0;
+        *pLen  = 0;
+    }
+}
+
+/**
+ * @brief  查询 SM0 邮箱是否有主站发来的新命令
+ * @retval 1 = 有 (SM0 状态 bit3=1), 0 = 无
+ */
 uint8_t ESC_Mbx_RxFull(void)
 {
     return ESC_SM_MbxFull(0);   /* SM0: 主站是否写了新命令 */
 }
 
+/**
+ * @brief  查询 SM1 邮箱响应是否仍未被主站取走
+ * @retval 1 = 满 (上次响应主站还没读), 0 = 空 (可写新响应)
+ */
 uint8_t ESC_Mbx_TxFull(void)
 {
     return ESC_SM_MbxFull(1);   /* SM1: 上次响应是否还没被取走 */
 }
 
+/**
+ * @brief  从 SM0 读取主站邮箱命令 (使用主站实际配置的地址)
+ * @param  pBuf: 输出缓冲区
+ * @param  len:  缓冲区大小
+ * @retval HAL_OK / HAL_ERROR
+ * @note   读满整个 SM0 区, 读到末字节 ESC 自动清 full
+ */
 HAL_StatusTypeDef ESC_Mbx_Read(uint8_t *pBuf, uint16_t len)
 {
-    uint16_t rdLen;
+    uint16_t sm0Addr, sm0Len, rdLen;
 
     if (pBuf == NULL || len == 0) return HAL_ERROR;
 
-    /* 整个 SM0 区一次读完 (读到末字节才会清 full) */
-    rdLen = (len < SM0_DEFAULT_LEN) ? SM0_DEFAULT_LEN : len;
-    if (rdLen > ESC_MAX_BLOCK_SIZE) rdLen = ESC_MAX_BLOCK_SIZE;
+    ESC_Mbx_GetSM0Info(&sm0Addr, &sm0Len);
+    if (sm0Addr == 0 || sm0Len == 0) return HAL_ERROR;  /* 主站未配 SM0 */
 
-    return ESC_ReadBlock(SM0_DEFAULT_ADDR, pBuf, rdLen);
+    rdLen = sm0Len;  /* 必须读满整个 SM0 区, 读到末字节才清 full */
+    if (rdLen > ESC_MAX_BLOCK_SIZE) rdLen = ESC_MAX_BLOCK_SIZE;
+    if (rdLen < len) rdLen = len;   /* 至少满足调用者请求 */
+
+    return ESC_ReadBlock(sm0Addr, pBuf, rdLen);
 }
 
+/**
+ * @brief  向 SM1 写入邮箱响应 (使用主站实际配置的地址)
+ * @param  pBuf: 要写入的响应数据
+ * @param  len:  数据长度 (≤ SM1 长度)
+ * @retval HAL_OK / HAL_ERROR
+ * @note   写满整个 SM1 区, 写到末字节 ESC 置 full 通知主站
+ */
 HAL_StatusTypeDef ESC_Mbx_Write(uint8_t *pBuf, uint16_t len)
 {
-    static uint8_t txbuf[SM1_DEFAULT_LEN];
+    uint16_t sm1Addr, sm1Len;
+    static uint8_t txbuf[ESC_MAX_BLOCK_SIZE];
     uint16_t i;
 
-    if (pBuf == NULL || len == 0 || len > SM1_DEFAULT_LEN) return HAL_ERROR;
+    if (pBuf == NULL || len == 0) return HAL_ERROR;
 
-    /* 必须写满整个 SM1 区, 写到末字节 ESC 才会置 full 通知主站.
+    ESC_Mbx_GetSM1Info(&sm1Addr, &sm1Len);
+    if (sm1Addr == 0 || sm1Len == 0) return HAL_ERROR;  /* 主站未配 SM1 */
+
+    if (len > sm1Len) return HAL_ERROR;     /* 数据不能超过 SM 区 */
+    if (sm1Len > ESC_MAX_BLOCK_SIZE) return HAL_ERROR;
+
+    /* 必须写满整个 SM1 区, 写到末字节 ESC 才会置 full.
      * 有效数据放前 len 字节, 其余补 0. */
-    for (i = 0; i < len; i++)            txbuf[i] = pBuf[i];
-    for (i = len; i < SM1_DEFAULT_LEN; i++) txbuf[i] = 0x00;
+    for (i = 0; i < len; i++)        txbuf[i] = pBuf[i];
+    for (i = len; i < sm1Len; i++)   txbuf[i] = 0x00;
 
-    return ESC_WriteBlock(SM1_DEFAULT_ADDR, txbuf, SM1_DEFAULT_LEN);
+    return ESC_WriteBlock(sm1Addr, txbuf, sm1Len);
 }
