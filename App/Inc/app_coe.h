@@ -91,7 +91,7 @@ typedef struct __attribute__((packed)) {
 /* Upload 响应 (从站回复数据) */
 #define SDO_CMD_UPLOAD_EXPEDITED    0x43U   /* 加速上传 (≤4 字节, 立即回) */
 #define SDO_CMD_UPLOAD_NORMAL       0x41U   /* 普通上传 (>4 字节, 需分段) */
-#define SDO_CMD_UPLOAD_SEG_RESP     0x20U   /* 分段上传响应 (SCS=1, t=0)  */
+#define SDO_CMD_UPLOAD_SEG_RESP     0x00U   /* 分段上传响应              */
 
 /* Download 请求 (主站写对象字典) */
 #define SDO_CMD_DOWNLOAD_REQ        0x20U   /* 初始下载请求              */

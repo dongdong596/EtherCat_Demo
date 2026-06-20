@@ -34,7 +34,7 @@ volatile uint8_t g_dbg_rxType      = 0;   /* 邮箱类型 (3=CoE)               
 volatile uint8_t g_dbg_coeService  = 0;   /* CoE 服务类型 (2=SDO Req)        */
 volatile uint8_t g_dbg_txTimeout   = 0;   /* 等待SM1超时次数                 */
 volatile uint8_t g_dbg_lastIndex   = 0;   /* 最后处理的Index低字节           */
-volatile uint8_t g_dbg_skipReason  = 0;   /* 跳过原因: 1=非CoE 2=非SDO 3=读邮箱失败 4=重复请求 */
+volatile uint8_t g_dbg_skipReason  = 0;   /* 跳过原因: 1=非CoE 2=非SDO 3=读邮箱失败 */
 volatile uint8_t g_dbg_sm0FullCnt  = 0;   /* SM0 Full 检测到的次数            */
 volatile uint16_t g_dbg_reqIndex   = 0;   /* 收到的请求Index（无论是否处理）   */
 volatile uint8_t g_dbg_mbxCounter  = 0;   /* 当前邮箱计数器值                 */
@@ -51,9 +51,20 @@ volatile uint8_t g_dbg_req2Cmd     = 0;   /* 第2个SDO请求的command         
 volatile uint32_t g_dbg_req1Data   = 0;   /* 第1个Download请求的数据          */
 volatile uint32_t g_dbg_req2Data   = 0;   /* 第2个Download请求的数据          */
 volatile uint8_t g_dbg_sdoInfoOp   = 0;   /* 最后一次SDO Info的OpCode         */
-static   uint8_t g_mbx_counter      = 0;   /* 邮箱计数器 (请求回传, ETG.1000.4) */
+volatile uint8_t g_dbg_lastCmd     = 0;
+volatile uint8_t g_dbg_lastSvc     = 0;
+volatile uint16_t g_dbg_sdoInfoListType = 0;
+volatile uint16_t g_dbg_lastTxLen  = 0;
+volatile uint8_t g_dbg_infoTxbuf[32] = {0};
+static   uint8_t g_mbx_counter      = 0;   /* 最近一次收到的邮箱计数器 */
+static   uint8_t g_tx_mbx_counter   = 0;   /* 从站发送邮箱计数器 */
 static   uint8_t g_last_mbx_counter = 0xFF; /* 上次处理的邮箱计数器，初始值0xFF */
 static   uint8_t g_req_count        = 0;   /* 收到请求的序号（用于记录第1/2个） */
+static const uint8_t *g_sdo_seg_data = NULL;
+static uint32_t g_sdo_seg_len = 0;
+static uint32_t g_sdo_seg_off = 0;
+static uint16_t g_sdo_seg_index = 0;
+static uint8_t g_sdo_seg_subindex = 0;
 
 /* ================================================================
  * §1  对象字典存储区
@@ -183,6 +194,16 @@ static void MBX_PutU32(uint8_t *buf, uint16_t offs, uint32_t val) {
     buf[offs + 3] = (uint8_t)((val >> 24) & 0xFF);
 }
 
+static uint16_t MBX_GetU16(const uint8_t *buf, uint16_t offs) {
+    return (uint16_t)buf[offs] | ((uint16_t)buf[offs + 1] << 8);
+}
+
+static uint8_t MBX_MakeType(uint8_t type) {
+    g_tx_mbx_counter++;
+    if ((g_tx_mbx_counter & 0x07U) == 0) g_tx_mbx_counter = 1;
+    return (uint8_t)((type & 0x0F) | (g_tx_mbx_counter << 4));
+}
+
 /** @brief 构造 CoE 头 2 字节: number[8:0] + reserved[11:9] + service[15:12] */
 static uint16_t CoE_MakeHeader(uint16_t number, uint8_t service) {
     return (uint16_t)((number & 0x1FF) | ((uint16_t)service << 12));
@@ -202,6 +223,23 @@ static uint16_t CoE_MakeHeader(uint16_t number, uint8_t service) {
 #define SDO_SUB_OFF         11
 #define SDO_DATA_OFF        12
 #define SDO_HDR_SIZE        8
+#define SDO_INFO_OFF        8
+#define SDO_INFO_HEAD_SIZE  4
+#define SDO_INFO_OPCODE_MASK 0x007FU
+
+#define SDO_INFO_ACCESS_READ      0x0007U
+#define SDO_INFO_ACCESS_WRITE     0x0038U
+#define SDO_INFO_ACCESS_RXPDO     0x0040U
+#define SDO_INFO_ACCESS_TXPDO     0x0080U
+
+#define SDO_INFO_OBJCODE_VAR      0x07U
+#define SDO_INFO_OBJCODE_RECORD   0x09U
+#define SDO_INFO_LIST_TYPE_BACKUP 0x04U
+#define SDO_INFO_LIST_TYPE_SET    0x05U
+
+static uint8_t CoE_GetService(const uint8_t *buf) {
+    return (uint8_t)((MBX_GetU16(buf, COE_OFF) >> 12) & 0x0F);
+}
 
 /**
  * @brief  在对象字典中查找条目
@@ -222,6 +260,98 @@ static OD_Entry_t* OD_Find(uint16_t index, uint8_t subindex)
     return NULL;
 }
 
+static uint8_t OD_GetMaxSubIndex(uint16_t index)
+{
+    uint16_t i;
+    uint8_t maxSub = 0;
+
+    for (i = 0; i < OD_SIZE; i++)
+    {
+        if (g_objectDict[i].index == index && g_objectDict[i].subindex > maxSub)
+        {
+            maxSub = g_objectDict[i].subindex;
+        }
+    }
+
+    return maxSub;
+}
+
+static uint8_t OD_GetObjectCode(uint16_t index)
+{
+    return (OD_GetMaxSubIndex(index) == 0) ? SDO_INFO_OBJCODE_VAR : SDO_INFO_OBJCODE_RECORD;
+}
+
+static uint8_t OD_GetObjectDataType(uint16_t index)
+{
+    OD_Entry_t *pEntry = OD_Find(index, 0);
+    return (pEntry != NULL) ? pEntry->dataType : OD_TYPE_UINT32;
+}
+
+static uint16_t OD_GetAccessFlags(uint16_t index, uint8_t subindex)
+{
+    OD_Entry_t *pEntry = OD_Find(index, subindex);
+    uint16_t flags = 0;
+
+    if (pEntry == NULL) return 0;
+
+    if (pEntry->access == OD_ACCESS_RO || pEntry->access == OD_ACCESS_RW)
+    {
+        flags |= SDO_INFO_ACCESS_READ;
+    }
+    if (pEntry->access == OD_ACCESS_WO || pEntry->access == OD_ACCESS_RW)
+    {
+        flags |= SDO_INFO_ACCESS_WRITE;
+    }
+
+    if (index == 0x2000 || index == 0x1600 || index == 0x1C12)
+    {
+        flags |= SDO_INFO_ACCESS_RXPDO;
+    }
+    if (index == 0x2001 || index == 0x1A00 || index == 0x1C13)
+    {
+        flags |= SDO_INFO_ACCESS_TXPDO;
+    }
+
+    return flags;
+}
+
+static uint16_t OD_GetBitLength(uint16_t index, uint8_t subindex)
+{
+    OD_Entry_t *pEntry = OD_Find(index, subindex);
+    return (pEntry != NULL) ? (uint16_t)(pEntry->dataLen * 8U) : 0;
+}
+
+static void SDO_InfoWriteHeader(uint8_t *txBuf, uint8_t opCode, uint16_t fragmentsLeft)
+{
+    MBX_PutU16(txBuf, SDO_INFO_OFF + 0, opCode & SDO_INFO_OPCODE_MASK);
+    MBX_PutU16(txBuf, SDO_INFO_OFF + 2, fragmentsLeft);
+}
+
+static void SDO_InfoSendError(uint32_t abortCode)
+{
+    uint8_t txBuf[128];
+    uint16_t dataLen = COE_SIZE + SDO_INFO_HEAD_SIZE + 4U;
+    uint16_t timeout = 1000;
+
+    memset(txBuf, 0, sizeof(txBuf));
+    MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
+    MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
+    txBuf[MBX_OFF_CHANNEL] = 0;
+    txBuf[MBX_OFF_TYPE] = MBX_MakeType(MBX_TYPE_COE);
+    MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_INFO));
+    SDO_InfoWriteHeader(txBuf, SDO_INFO_OPCODE_ERROR, 0);
+    MBX_PutU32(txBuf, SDO_INFO_OFF + SDO_INFO_HEAD_SIZE, abortCode);
+
+    while (ESC_Mbx_TxFull() && timeout--) { HAL_Delay(1); }
+    if (timeout == 0) {
+        g_dbg_txTimeout++;
+        return;
+    }
+
+    g_dbg_lastTxLen = MBX_HDR_SIZE + dataLen;
+    ESC_Mbx_Write(txBuf, MBX_HDR_SIZE + dataLen);
+}
+
 /**
  * @brief  发送 SDO Abort 响应
  * @param  index:     对象索引
@@ -239,7 +369,7 @@ static void SDO_SendAbort(uint16_t index, uint8_t subindex, uint32_t abortCode)
     MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
     MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
     txBuf[MBX_OFF_CHANNEL] = 0;
-    txBuf[MBX_OFF_TYPE]    = MBX_TYPE_COE | (g_mbx_counter << 4);
+    txBuf[MBX_OFF_TYPE]    = MBX_MakeType(MBX_TYPE_COE);
 
     /* CoE 头 */
     MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_RESPONSE));
@@ -292,7 +422,7 @@ static void SDO_HandleUpload(uint16_t index, uint8_t subindex)
         MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
         MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
         txBuf[MBX_OFF_CHANNEL] = 0;
-        txBuf[MBX_OFF_TYPE]    = MBX_TYPE_COE | (g_mbx_counter << 4);  /* bits[3:0]=3, counter=回传 */
+        txBuf[MBX_OFF_TYPE]    = MBX_MakeType(MBX_TYPE_COE);
 
         /* CoE 头 (2 B): service=SDO_RESPONSE(3), number=0 */
         MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_RESPONSE));
@@ -311,12 +441,12 @@ static void SDO_HandleUpload(uint16_t index, uint8_t subindex)
             return;
         }
 
-        dataLen = COE_SIZE + SDO_HDR_SIZE + pEntry->dataLen;
+        dataLen = COE_SIZE + SDO_HDR_SIZE;
 
         MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
         MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
         txBuf[MBX_OFF_CHANNEL] = 0;
-        txBuf[MBX_OFF_TYPE]    = MBX_TYPE_COE | (g_mbx_counter << 4);
+        txBuf[MBX_OFF_TYPE]    = MBX_MakeType(MBX_TYPE_COE);
 
         MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_RESPONSE));
 
@@ -326,7 +456,11 @@ static void SDO_HandleUpload(uint16_t index, uint8_t subindex)
         txBuf[SDO_SUB_OFF] = subindex;
         MBX_PutU32(txBuf, SDO_DATA_OFF, pEntry->dataLen);
 
-        memcpy(txBuf + MBX_HDR_SIZE + COE_SIZE + SDO_HDR_SIZE, pEntry->pData, pEntry->dataLen);
+        g_sdo_seg_data = (const uint8_t *)pEntry->pData;
+        g_sdo_seg_len = pEntry->dataLen;
+        g_sdo_seg_off = 0;
+        g_sdo_seg_index = index;
+        g_sdo_seg_subindex = subindex;
     }
 
     /* 等待上次响应被取走 */
@@ -340,7 +474,66 @@ static void SDO_HandleUpload(uint16_t index, uint8_t subindex)
 
     memcpy((void*)g_dbg_txbuf, txBuf, 16);
     g_dbg_lastIndex = (uint8_t)(index & 0xFF);
+    g_dbg_lastTxLen = MBX_HDR_SIZE + dataLen;
     ESC_Mbx_Write(txBuf, MBX_HDR_SIZE + dataLen);
+}
+
+static void SDO_HandleUploadSegment(uint8_t reqCmd)
+{
+    uint8_t txBuf[128];
+    uint16_t dataLen = COE_SIZE + 1U + 7U;
+    uint16_t timeout = 1000;
+    uint32_t remain;
+    uint8_t sendLen;
+    uint8_t segCmd;
+
+    if (g_sdo_seg_data == NULL || g_sdo_seg_off >= g_sdo_seg_len)
+    {
+        SDO_SendAbort(g_sdo_seg_index, g_sdo_seg_subindex, SDO_ABORT_CMD_INVALID);
+        return;
+    }
+
+    memset(txBuf, 0, sizeof(txBuf));
+
+    remain = g_sdo_seg_len - g_sdo_seg_off;
+    sendLen = (remain > 7U) ? 7U : (uint8_t)remain;
+
+    MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
+    MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
+    txBuf[MBX_OFF_CHANNEL] = 0;
+    txBuf[MBX_OFF_TYPE] = MBX_MakeType(MBX_TYPE_COE);
+    MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_RESPONSE));
+
+    segCmd = (uint8_t)(SDO_CMD_UPLOAD_SEG_RESP | (reqCmd & 0x10U));
+    if (sendLen < 7U)
+    {
+        segCmd |= (uint8_t)((7U - sendLen) << 1);
+    }
+    if (remain <= 7U)
+    {
+        segCmd |= 0x01U;
+    }
+
+    txBuf[SDO_OFF] = segCmd;
+    memcpy(txBuf + SDO_OFF + 1, g_sdo_seg_data + g_sdo_seg_off, sendLen);
+
+    while (ESC_Mbx_TxFull() && timeout--) { HAL_Delay(1); }
+    if (timeout == 0) {
+        g_dbg_txTimeout++;
+        return;
+    }
+
+    memcpy((void*)g_dbg_txbuf, txBuf, 16);
+    g_dbg_lastTxLen = MBX_HDR_SIZE + dataLen;
+    ESC_Mbx_Write(txBuf, MBX_HDR_SIZE + dataLen);
+
+    g_sdo_seg_off += sendLen;
+    if (g_sdo_seg_off >= g_sdo_seg_len)
+    {
+        g_sdo_seg_data = NULL;
+        g_sdo_seg_len = 0;
+        g_sdo_seg_off = 0;
+    }
 }
 
 /**
@@ -388,7 +581,7 @@ static void SDO_HandleDownload(SDO_Header_t *pSDO)
     MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
     MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
     txBuf[MBX_OFF_CHANNEL] = 0;
-    txBuf[MBX_OFF_TYPE]    = MBX_TYPE_COE | (g_mbx_counter << 4);
+    txBuf[MBX_OFF_TYPE]    = MBX_MakeType(MBX_TYPE_COE);
 
     MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_RESPONSE));
 
@@ -419,7 +612,8 @@ static void SDO_HandleInfo(uint8_t *rxBuf)
     memset(txBuf, 0, sizeof(txBuf));
 
     /* SDO Info 请求格式：CoE头后第1字节是OpCode */
-    uint8_t opCode = rxBuf[MBX_HDR_SIZE + COE_SIZE];
+    uint16_t infoHead = MBX_GetU16(rxBuf, SDO_INFO_OFF);
+    uint8_t opCode = (uint8_t)(infoHead & SDO_INFO_OPCODE_MASK);
     g_dbg_sdoInfoOp = opCode;  /* 记录OpCode用于调试 */
 
     if (opCode == SDO_INFO_OPCODE_LIST_REQ)
@@ -431,31 +625,69 @@ static void SDO_HandleInfo(uint8_t *rxBuf)
             0x1600, 0x1A00, 0x1C00, 0x1C12, 0x1C13,
             0x2000, 0x2001
         };
+        uint16_t rxPdoList[] = { 0x1600, 0x1C12, 0x2000 };
+        uint16_t txPdoList[] = { 0x1A00, 0x1C13, 0x2001 };
         uint16_t objCount = sizeof(objList) / sizeof(objList[0]);
-        /* SDO Info List Response格式: OpCode(1) + Incomplete(1) + reserved(2) + FragLeft(2) + ObjCount(2) + List */
-        uint16_t dataLen = 2 + 1 + 1 + 2 + 2 + 2 + objCount * 2;  /* CoE头 + SDO Info数据 */
+        uint16_t *listPtr = objList;
+        uint16_t listCount = objCount;
+        /* SDO Info List Response: InfoHead(2) + FragmentsLeft(2) + ListType(2) + List */
+        uint16_t listType = MBX_GetU16(rxBuf, SDO_INFO_OFF + SDO_INFO_HEAD_SIZE);
+        uint16_t dataLen;
+        g_dbg_sdoInfoListType = listType;
+
+        if (listType > SDO_INFO_LIST_TYPE_SET)
+        {
+            SDO_InfoSendError(SDO_ABORT_UNSUPPORTED);
+            return;
+        }
+
+        if (listType == SDO_INFO_LIST_TYPE_RXPDO)
+        {
+            listPtr = rxPdoList;
+            listCount = sizeof(rxPdoList) / sizeof(rxPdoList[0]);
+        }
+        else if (listType == SDO_INFO_LIST_TYPE_TXPDO)
+        {
+            listPtr = txPdoList;
+            listCount = sizeof(txPdoList) / sizeof(txPdoList[0]);
+        }
+        else if (listType == SDO_INFO_LIST_TYPE_BACKUP || listType == SDO_INFO_LIST_TYPE_SET)
+        {
+            listCount = 0;
+        }
+
+        dataLen = COE_SIZE + SDO_INFO_HEAD_SIZE;
+        dataLen += (uint16_t)(2U + ((listType == SDO_INFO_LIST_TYPE_LENGTH) ? 10U : (listCount * 2U)));
 
         /* 邮箱头 */
         MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
         MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
         txBuf[MBX_OFF_CHANNEL] = 0;
-        txBuf[MBX_OFF_TYPE] = MBX_TYPE_COE | (g_mbx_counter << 4);
+        txBuf[MBX_OFF_TYPE] = MBX_MakeType(MBX_TYPE_COE);
 
         /* CoE 头 */
         MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_INFO));
 
-        /* SDO Info List Response */
-        uint16_t offset = MBX_HDR_SIZE + COE_SIZE;
-        txBuf[offset + 0] = SDO_INFO_OPCODE_LIST_RESP;  /* OpCode */
-        txBuf[offset + 1] = 0x00;                       /* Incomplete = false (所有数据一次返回) */
-        MBX_PutU16(txBuf, offset + 2, 0);               /* Reserved */
-        MBX_PutU16(txBuf, offset + 4, 0);               /* Fragments left = 0 */
-        MBX_PutU16(txBuf, offset + 6, objCount);        /* Object count */
+        SDO_InfoWriteHeader(txBuf, SDO_INFO_OPCODE_LIST_RESP, 0);
 
-        /* 填充对象索引列表 */
-        for (uint16_t i = 0; i < objCount; i++)
+        uint16_t offset = SDO_INFO_OFF + SDO_INFO_HEAD_SIZE;
+
+        if (listType == SDO_INFO_LIST_TYPE_LENGTH)
         {
-            MBX_PutU16(txBuf, offset + 8 + i * 2, objList[i]);
+            MBX_PutU16(txBuf, offset + 0, listType);
+            MBX_PutU16(txBuf, offset + 2, objCount);
+            MBX_PutU16(txBuf, offset + 4, (uint16_t)(sizeof(rxPdoList) / sizeof(rxPdoList[0])));
+            MBX_PutU16(txBuf, offset + 6, (uint16_t)(sizeof(txPdoList) / sizeof(txPdoList[0])));
+            MBX_PutU16(txBuf, offset + 8, 0);
+            MBX_PutU16(txBuf, offset + 10, 0);
+        }
+        else
+        {
+            MBX_PutU16(txBuf, offset, listType);
+            for (uint16_t i = 0; i < listCount; i++)
+            {
+                MBX_PutU16(txBuf, offset + 2 + i * 2, listPtr[i]);
+            }
         }
 
         /* 等待发送 */
@@ -467,30 +699,38 @@ static void SDO_HandleInfo(uint8_t *rxBuf)
         }
 
         memcpy((void*)g_dbg_txbuf, txBuf, 16);
+        memcpy((void*)g_dbg_infoTxbuf, txBuf, 32);
+        g_dbg_lastTxLen = MBX_HDR_SIZE + dataLen;
         ESC_Mbx_Write(txBuf, MBX_HDR_SIZE + dataLen);
     }
     else if (opCode == SDO_INFO_OPCODE_OBJ_REQ)
     {
         /* Get Object Description Request */
-        uint16_t reqIndex = rxBuf[MBX_HDR_SIZE + COE_SIZE + 1] |
-                           ((uint16_t)rxBuf[MBX_HDR_SIZE + COE_SIZE + 2] << 8);
+        uint16_t reqIndex = MBX_GetU16(rxBuf, SDO_INFO_OFF + SDO_INFO_HEAD_SIZE);
 
-        /* 简化：返回基本对象描述 */
-        uint16_t dataLen = 2 + 1 + 2 + 2 + 1 + 1;  /* CoE + OpCode + Index + DataType + MaxSub + ObjCode */
+        if (OD_Find(reqIndex, 0) == NULL)
+        {
+            SDO_InfoSendError(SDO_ABORT_NOT_EXIST);
+            return;
+        }
+
+        uint16_t dataLen = COE_SIZE + SDO_INFO_HEAD_SIZE + 6U;
 
         MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
         MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
         txBuf[MBX_OFF_CHANNEL] = 0;
-        txBuf[MBX_OFF_TYPE] = MBX_TYPE_COE | (g_mbx_counter << 4);
+        txBuf[MBX_OFF_TYPE] = MBX_MakeType(MBX_TYPE_COE);
 
         MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_INFO));
 
-        uint16_t offset = MBX_HDR_SIZE + COE_SIZE;
-        txBuf[offset + 0] = SDO_INFO_OPCODE_OBJ_RESP;
-        MBX_PutU16(txBuf, offset + 1, reqIndex);
-        MBX_PutU16(txBuf, offset + 3, 0x0007);  /* DataType: UINT32 */
-        txBuf[offset + 5] = 0;  /* MaxSubIndex */
-        txBuf[offset + 6] = 0x07;  /* ObjCode: VAR */
+        SDO_InfoWriteHeader(txBuf, SDO_INFO_OPCODE_OBJ_RESP, 0);
+
+        uint16_t offset = SDO_INFO_OFF + SDO_INFO_HEAD_SIZE;
+        MBX_PutU16(txBuf, offset + 0, reqIndex);
+        MBX_PutU16(txBuf, offset + 2, OD_GetObjectDataType(reqIndex));
+        MBX_PutU16(txBuf, offset + 4,
+                   (uint16_t)OD_GetMaxSubIndex(reqIndex) |
+                   ((uint16_t)OD_GetObjectCode(reqIndex) << 8));
 
         uint16_t timeout = 1000;
         while (ESC_Mbx_TxFull() && timeout--) { HAL_Delay(1); }
@@ -504,28 +744,34 @@ static void SDO_HandleInfo(uint8_t *rxBuf)
     else if (opCode == SDO_INFO_OPCODE_ENTRY_REQ)
     {
         /* Get Entry Description Request */
-        uint16_t reqIndex = rxBuf[MBX_HDR_SIZE + COE_SIZE + 1] |
-                           ((uint16_t)rxBuf[MBX_HDR_SIZE + COE_SIZE + 2] << 8);
-        uint8_t reqSub = rxBuf[MBX_HDR_SIZE + COE_SIZE + 3];
-        uint8_t valueInfo = rxBuf[MBX_HDR_SIZE + COE_SIZE + 4];
+        uint16_t reqIndex = MBX_GetU16(rxBuf, SDO_INFO_OFF + SDO_INFO_HEAD_SIZE);
+        uint8_t reqSub = rxBuf[SDO_INFO_OFF + SDO_INFO_HEAD_SIZE + 2];
+        uint8_t valueInfo = rxBuf[SDO_INFO_OFF + SDO_INFO_HEAD_SIZE + 3];
+        OD_Entry_t *pEntry = OD_Find(reqIndex, reqSub);
 
-        /* 简化：返回基本条目描述 */
-        uint16_t dataLen = 2 + 1 + 2 + 1 + 1 + 2 + 2;
+        if (pEntry == NULL)
+        {
+            SDO_InfoSendError(SDO_ABORT_NOT_EXIST);
+            return;
+        }
+
+        uint16_t dataLen = COE_SIZE + SDO_INFO_HEAD_SIZE + 10U;
 
         MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
         MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
         txBuf[MBX_OFF_CHANNEL] = 0;
-        txBuf[MBX_OFF_TYPE] = MBX_TYPE_COE | (g_mbx_counter << 4);
+        txBuf[MBX_OFF_TYPE] = MBX_MakeType(MBX_TYPE_COE);
 
         MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_INFO));
 
-        uint16_t offset = MBX_HDR_SIZE + COE_SIZE;
-        txBuf[offset + 0] = SDO_INFO_OPCODE_ENTRY_RESP;
-        MBX_PutU16(txBuf, offset + 1, reqIndex);
-        txBuf[offset + 3] = reqSub;
-        txBuf[offset + 4] = valueInfo;
-        MBX_PutU16(txBuf, offset + 5, 0x0007);  /* DataType: UINT32 */
-        MBX_PutU16(txBuf, offset + 7, 32);  /* BitLength */
+        SDO_InfoWriteHeader(txBuf, SDO_INFO_OPCODE_ENTRY_RESP, 0);
+
+        uint16_t offset = SDO_INFO_OFF + SDO_INFO_HEAD_SIZE;
+        MBX_PutU16(txBuf, offset + 0, reqIndex);
+        MBX_PutU16(txBuf, offset + 2, (uint16_t)reqSub | ((uint16_t)valueInfo << 8));
+        MBX_PutU16(txBuf, offset + 4, pEntry->dataType);
+        MBX_PutU16(txBuf, offset + 6, OD_GetBitLength(reqIndex, reqSub));
+        MBX_PutU16(txBuf, offset + 8, OD_GetAccessFlags(reqIndex, reqSub));
 
         uint16_t timeout = 1000;
         while (ESC_Mbx_TxFull() && timeout--) { HAL_Delay(1); }
@@ -538,26 +784,7 @@ static void SDO_HandleInfo(uint8_t *rxBuf)
     }
     else
     {
-        /* 不支持的 OpCode - 返回错误 */
-        uint16_t dataLen = COE_SIZE + 8;
-
-        MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
-        txBuf[MBX_OFF_CHANNEL] = 0;
-        txBuf[MBX_OFF_TYPE] = MBX_TYPE_COE | (g_mbx_counter << 4);
-
-        MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_INFO));
-
-        txBuf[MBX_HDR_SIZE + COE_SIZE + 0] = SDO_INFO_OPCODE_ERROR;
-        MBX_PutU32(txBuf, MBX_HDR_SIZE + COE_SIZE + 4, SDO_ABORT_UNSUPPORTED);
-
-        uint16_t timeout = 1000;
-        while (ESC_Mbx_TxFull() && timeout--) { HAL_Delay(1); }
-        if (timeout == 0) {
-            g_dbg_txTimeout++;
-            return;
-        }
-
-        ESC_Mbx_Write(txBuf, MBX_HDR_SIZE + dataLen);
+        SDO_InfoSendError(SDO_ABORT_UNSUPPORTED);
     }
 }
 
@@ -578,6 +805,12 @@ void CoE_Init(void)
     g_dbg_coe_rxCnt = 0;
     g_dbg_coe_procCnt = 0;
     g_last_mbx_counter = 0xFF;
+    g_tx_mbx_counter = 0;
+    g_sdo_seg_data = NULL;
+    g_sdo_seg_len = 0;
+    g_sdo_seg_off = 0;
+    g_sdo_seg_index = 0;
+    g_sdo_seg_subindex = 0;
 
     __NOP();                                          // 断点设这里
 }
@@ -624,22 +857,6 @@ uint8_t CoE_MainTask(void)
     g_mbx_counter = (pMbxHdr->typeCounter >> 4) & 0x0F;  /* 保存计数器供响应回传 */
     g_dbg_mbxCounter = g_mbx_counter;  /* 调试：记录当前计数器 */
 
-    /* 检查是否为重复请求（邮箱计数器相同） */
-    if (g_mbx_counter == g_last_mbx_counter)
-    {
-        g_dbg_coe_state = 4;  /* 重复请求 */
-        g_dbg_skipReason = 4; /* 重复请求 */
-        /* 记录到第1/2个请求 */
-        if (g_req_count == 0) {
-            g_dbg_req1Skip = 4;
-            g_req_count++;
-        } else if (g_req_count == 1) {
-            g_dbg_req2Skip = 4;
-            g_req_count++;
-        }
-        return 0;  /* 跳过重复请求 */
-    }
-
     /* 只处理 CoE 类型 (bits[3:0], mask 掉计数器 bits[7:4]) */
     if ((pMbxHdr->typeCounter & 0x0F) != MBX_TYPE_COE)
     {
@@ -657,19 +874,21 @@ uint8_t CoE_MainTask(void)
     }
 
     /* 解析 CoE 头 */
-    CoE_Header_t *pCoEHdr = (CoE_Header_t *)(rxBuf + sizeof(MBX_Header_t));
-    g_dbg_coeService = *(uint8_t*)pCoEHdr;  /* CoE 头低字节含 service */
+    uint8_t coeService = CoE_GetService(rxBuf);
+    g_dbg_coeService = coeService;
+    g_dbg_lastSvc = coeService;
 
     /* 处理 SDO Info 请求 */
-    if (pCoEHdr->service == COE_SERVICE_SDO_INFO)
+    if (coeService == COE_SERVICE_SDO_INFO)
     {
+        g_dbg_lastCmd = 0;
         /* 记录到第1/2个请求 */
         if (g_req_count == 0) {
-            g_dbg_req1Svc = pCoEHdr->service;
+            g_dbg_req1Svc = coeService;
             g_dbg_req1Skip = 0;  /* SDO Info请求，未跳过 */
             g_req_count++;
         } else if (g_req_count == 1) {
-            g_dbg_req2Svc = pCoEHdr->service;
+            g_dbg_req2Svc = coeService;
             g_dbg_req2Skip = 0;  /* SDO Info请求，未跳过 */
             g_req_count++;
         }
@@ -682,17 +901,17 @@ uint8_t CoE_MainTask(void)
     }
 
     /* 只处理 SDO 请求 */
-    if (pCoEHdr->service != COE_SERVICE_SDO_REQUEST)
+    if (coeService != COE_SERVICE_SDO_REQUEST)
     {
         g_dbg_coe_state = 2;  /* 非 SDO */
         g_dbg_skipReason = 2; /* 非SDO */
         /* 记录到第1/2个请求 */
         if (g_req_count == 0) {
-            g_dbg_req1Svc = pCoEHdr->service;
+            g_dbg_req1Svc = coeService;
             g_dbg_req1Skip = 2;
             g_req_count++;
         } else if (g_req_count == 1) {
-            g_dbg_req2Svc = pCoEHdr->service;
+            g_dbg_req2Svc = coeService;
             g_dbg_req2Skip = 2;
             g_req_count++;
         }
@@ -700,19 +919,20 @@ uint8_t CoE_MainTask(void)
     }
 
     /* 解析 SDO 头 */
-    SDO_Header_t *pSDO = (SDO_Header_t *)(rxBuf + sizeof(MBX_Header_t) + sizeof(CoE_Header_t));
+    SDO_Header_t *pSDO = (SDO_Header_t *)(rxBuf + SDO_OFF);
 
     uint8_t  cmd      = pSDO->command;
     uint16_t index    = pSDO->index;
     uint8_t  subindex = pSDO->subindex;
 
     g_dbg_reqIndex = index;  /* 记录收到的Index，无论是否处理 */
+    g_dbg_lastCmd = cmd;
 
     /* 记录前2个请求的详细信息 */
     if (g_req_count == 0) {
         g_dbg_req1Index = index;
         g_dbg_req1Counter = g_mbx_counter;
-        g_dbg_req1Svc = pCoEHdr->service;
+        g_dbg_req1Svc = coeService;
         g_dbg_req1Cmd = cmd;  /* 记录SDO命令 */
         g_dbg_req1Data = pSDO->data;  /* 记录数据域 */
         g_dbg_req1Skip = 0;  /* SDO请求，未跳过 */
@@ -720,7 +940,7 @@ uint8_t CoE_MainTask(void)
     } else if (g_req_count == 1) {
         g_dbg_req2Index = index;
         g_dbg_req2Counter = g_mbx_counter;
-        g_dbg_req2Svc = pCoEHdr->service;
+        g_dbg_req2Svc = coeService;
         g_dbg_req2Cmd = cmd;  /* 记录SDO命令 */
         g_dbg_req2Data = pSDO->data;  /* 记录数据域 */
         g_dbg_req2Skip = 0;  /* SDO请求，未跳过 */
@@ -732,6 +952,10 @@ uint8_t CoE_MainTask(void)
     {
         /* Upload 请求: 主站读对象 */
         SDO_HandleUpload(index, subindex);
+    }
+    else if ((cmd & 0xE0U) == SDO_CMD_UPLOAD_SEG_REQ)
+    {
+        SDO_HandleUploadSegment(cmd);
     }
     else if ((cmd & 0xE0) == 0x20)  /* Download 请求: 主站写对象 */
     {
