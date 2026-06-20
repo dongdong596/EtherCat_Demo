@@ -111,6 +111,8 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  static uint32_t loopCount = 0;
+
   while (1)
   {
     /* USER CODE END WHILE */
@@ -136,11 +138,21 @@ int main(void)
     ECAT_MainTask();
     ECAT_MainTask();
 
-    /* ---- CoE 邮箱通信 ---- */
+    /* ---- CoE 邮箱通信: 多次处理以应对主站连续SDO请求 ---- */
+    CoE_MainTask();
+    CoE_MainTask();
     CoE_MainTask();
 
     /* ---- 过程数据交换 (OP 态下激活) ---- */
     ECAT_ProcessDataExchange();
+
+    /* ---- 测试: 每秒递增 testCounter，供主站读取验证 ---- */
+    loopCount++;
+    if (loopCount >= 200) {  // 5ms * 200 = 1秒
+        extern volatile uint32_t g_testCounter;
+        g_testCounter++;
+        loopCount = 0;
+    }
 
     /* ---- 测试模式: 取消注释下面其中一行 ---- */
     // ECAT_SelfTest();              /* [T] 第4步自测: 返回 0 即通过 */

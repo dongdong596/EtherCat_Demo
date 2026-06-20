@@ -52,6 +52,10 @@ extern volatile uint8_t  g_dbg_sm0Status;
 extern volatile uint8_t  g_dbg_sm0Active;
 extern volatile uint16_t g_dbg_sm1Addr;
 extern volatile uint8_t  g_dbg_sm1Ctrl;
+
+/* ── AL Event Request (每次 SPI 事务自动更新) ── */
+extern volatile uint8_t  g_dbg_irq0;
+extern volatile uint8_t  g_dbg_irq1;
 extern volatile uint8_t  g_dbg_sm1Status;
 extern volatile uint8_t  g_dbg_sm1Active;
 

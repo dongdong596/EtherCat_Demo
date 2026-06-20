@@ -29,6 +29,31 @@ volatile uint8_t g_dbg_coe_procCnt = 0;  /* 成功处理 SDO 请求的次数    
 volatile uint8_t g_dbg_sm0RawSts   = 0;  /* SM0 状态寄存器原始值 (每周期更新) */
 volatile uint8_t g_dbg_coe_state   = 0;  /* 0=无事件 1=有事件但非CoE 2=非SDO 3=已处理 */
 volatile uint8_t g_dbg_txbuf[16]   = {0}; /* SDO 响应帧调试: Memory窗口直接查看 */
+volatile uint8_t g_dbg_rxbuf[16]   = {0}; /* 收到的邮箱原始数据, 前16字节     */
+volatile uint8_t g_dbg_rxType      = 0;   /* 邮箱类型 (3=CoE)                */
+volatile uint8_t g_dbg_coeService  = 0;   /* CoE 服务类型 (2=SDO Req)        */
+volatile uint8_t g_dbg_txTimeout   = 0;   /* 等待SM1超时次数                 */
+volatile uint8_t g_dbg_lastIndex   = 0;   /* 最后处理的Index低字节           */
+volatile uint8_t g_dbg_skipReason  = 0;   /* 跳过原因: 1=非CoE 2=非SDO 3=读邮箱失败 4=重复请求 */
+volatile uint8_t g_dbg_sm0FullCnt  = 0;   /* SM0 Full 检测到的次数            */
+volatile uint16_t g_dbg_reqIndex   = 0;   /* 收到的请求Index（无论是否处理）   */
+volatile uint8_t g_dbg_mbxCounter  = 0;   /* 当前邮箱计数器值                 */
+volatile uint16_t g_dbg_req1Index  = 0;   /* 第1个请求的Index                 */
+volatile uint16_t g_dbg_req2Index  = 0;   /* 第2个请求的Index                 */
+volatile uint8_t g_dbg_req1Counter = 0;   /* 第1个请求的counter               */
+volatile uint8_t g_dbg_req2Counter = 0;   /* 第2个请求的counter               */
+volatile uint8_t g_dbg_req1Skip    = 0;   /* 第1个请求跳过原因                */
+volatile uint8_t g_dbg_req2Skip    = 0;   /* 第2个请求跳过原因                */
+volatile uint8_t g_dbg_req1Svc     = 0;   /* 第1个请求的CoE service           */
+volatile uint8_t g_dbg_req2Svc     = 0;   /* 第2个请求的CoE service           */
+volatile uint8_t g_dbg_req1Cmd     = 0;   /* 第1个SDO请求的command            */
+volatile uint8_t g_dbg_req2Cmd     = 0;   /* 第2个SDO请求的command            */
+volatile uint32_t g_dbg_req1Data   = 0;   /* 第1个Download请求的数据          */
+volatile uint32_t g_dbg_req2Data   = 0;   /* 第2个Download请求的数据          */
+volatile uint8_t g_dbg_sdoInfoOp   = 0;   /* 最后一次SDO Info的OpCode         */
+static   uint8_t g_mbx_counter      = 0;   /* 邮箱计数器 (请求回传, ETG.1000.4) */
+static   uint8_t g_last_mbx_counter = 0xFF; /* 上次处理的邮箱计数器，初始值0xFF */
+static   uint8_t g_req_count        = 0;   /* 收到请求的序号（用于记录第1/2个） */
 
 /* ================================================================
  * §1  对象字典存储区
@@ -44,12 +69,31 @@ static char     g_swVersion[]      = "1.0.0";       /* 0x100A: 软件版本     
 static uint8_t  g_identity_maxSub  = 4;             /* 子索引 0: 最大子索引号   */
 static uint32_t g_vendorID         = 0x00000596UL;  /* 子索引 1: 厂商 ID        */
 static uint32_t g_productCode      = 0x58100000UL;  /* 子索引 2: 产品代码       */
-static uint32_t g_revisionNumber   = 0x00010000UL;  /* 子索引 3: 版本号         */
+static uint32_t g_revisionNumber   = 0x00020111UL;  /* 子索引 3: 版本号 (与XML/EEPROM一致) */
 static uint32_t g_serialNumber     = 0x00000001UL;  /* 子索引 4: 序列号         */
 
 /* ── 测试对象 (应用层可读写) ── */
-static uint32_t g_testCounter      = 0;             /* 0x2000: 测试计数器 (rw)  */
+volatile uint32_t g_testCounter = 0;             /* 0x2000: 测试计数器 (rw)  */
 static uint32_t g_testStatus       = 0x12345678UL;  /* 0x2001: 测试状态 (ro)    */
+
+/* ── SM 通信类型 (0x1C00, 4 个子对象) ── */
+static uint8_t  g_smType_maxSub    = 4;
+static uint8_t  g_sm0_type         = 1;              /* SM0: 邮箱接收 (MbxRx)    */
+static uint8_t  g_sm1_type         = 2;              /* SM1: 邮箱发送 (MbxTx)    */
+static uint8_t  g_sm2_type         = 3;              /* SM2: 过程数据输出 (RxPDO) */
+static uint8_t  g_sm3_type         = 4;              /* SM3: 过程数据输入 (TxPDO) */
+
+/* ── PDO Assign (0x1C12 / 0x1C13) ── */
+static uint8_t  g_rxPdoAssign      = 1;              /* 0x1C12:00 分配了 1 个 RxPDO */
+static uint16_t g_rxPdoIdx         = 0x1600;         /* 0x1C12:01 → 0x1600         */
+static uint8_t  g_txPdoAssign      = 1;              /* 0x1C13:00 分配了 1 个 TxPDO */
+static uint16_t g_txPdoIdx         = 0x1A00;         /* 0x1C13:01 → 0x1A00         */
+
+/* ── PDO 映射 (0x1600 RxPDO / 0x1A00 TxPDO) ── */
+static uint8_t  g_rxPdoMapSub0     = 1;              /* 0x1600:00 映射条目数        */
+static uint32_t g_rxPdoMapEntry    = 0x20000020UL;   /* 0x1600:01 → 0x2000:00,32bit */
+static uint8_t  g_txPdoMapSub0     = 1;              /* 0x1A00:00 映射条目数        */
+static uint32_t g_txPdoMapEntry    = 0x20010020UL;   /* 0x1A00:01 → 0x2001:00,32bit */
 
 /* ================================================================
  * §2  对象字典定义 (OD_Entry_t 数组)
@@ -83,6 +127,33 @@ static OD_Entry_t g_objectDict[] = {
      * │ 应用对象 (0x2000~0x5FFF: 厂商自定义区)                  │
      * └─────────────────────────────────────────────────────────┘ */
 
+    /* ┌─────────────────────────────────────────────────────────┐
+     * │ SM / PDO 对象 (ETG.1000.6, TwinCAT 必需)               │
+     * └─────────────────────────────────────────────────────────┘ */
+
+    /* 0x1C00: Sync Manager Communication Type */
+    { 0x1C00, 0, OD_TYPE_UINT8, OD_ACCESS_RO, 0, 1, &g_smType_maxSub },
+    { 0x1C00, 1, OD_TYPE_UINT8, OD_ACCESS_RO, 0, 1, &g_sm0_type },
+    { 0x1C00, 2, OD_TYPE_UINT8, OD_ACCESS_RO, 0, 1, &g_sm1_type },
+    { 0x1C00, 3, OD_TYPE_UINT8, OD_ACCESS_RO, 0, 1, &g_sm2_type },
+    { 0x1C00, 4, OD_TYPE_UINT8, OD_ACCESS_RO, 0, 1, &g_sm3_type },
+
+    /* 0x1600: RxPDO Mapping (1 条目 → 0x2000:00, 32bit) */
+    { 0x1600, 0, OD_TYPE_UINT8,  OD_ACCESS_RO, 0, 1, &g_rxPdoMapSub0 },
+    { 0x1600, 1, OD_TYPE_UINT32, OD_ACCESS_RO, 0, 4, &g_rxPdoMapEntry },
+
+    /* 0x1A00: TxPDO Mapping (1 条目 → 0x2001:00, 32bit) */
+    { 0x1A00, 0, OD_TYPE_UINT8,  OD_ACCESS_RO, 0, 1, &g_txPdoMapSub0 },
+    { 0x1A00, 1, OD_TYPE_UINT32, OD_ACCESS_RO, 0, 4, &g_txPdoMapEntry },
+
+    /* 0x1C12: RxPDO Assign */
+    { 0x1C12, 0, OD_TYPE_UINT8,  OD_ACCESS_RO, 0, 1, &g_rxPdoAssign },
+    { 0x1C12, 1, OD_TYPE_UINT16, OD_ACCESS_RO, 0, 2, &g_rxPdoIdx },
+
+    /* 0x1C13: TxPDO Assign */
+    { 0x1C13, 0, OD_TYPE_UINT8,  OD_ACCESS_RO, 0, 1, &g_txPdoAssign },
+    { 0x1C13, 1, OD_TYPE_UINT16, OD_ACCESS_RO, 0, 2, &g_txPdoIdx },
+
     /* 0x2000: 测试计数器 (读写) */
     { 0x2000, 0, OD_TYPE_UINT32, OD_ACCESS_RW, 0, 4, &g_testCounter },
 
@@ -95,6 +166,42 @@ static OD_Entry_t g_objectDict[] = {
 /* ================================================================
  * §3  内部辅助函数
  * ================================================================ */
+
+/* ── 邮箱帧构造辅助 (避免 packed 结构体对齐问题) ── */
+
+/** @brief 往 txBuf 写入 16-bit 小端序值 */
+static void MBX_PutU16(uint8_t *buf, uint16_t offs, uint16_t val) {
+    buf[offs]     = (uint8_t)(val & 0xFF);
+    buf[offs + 1] = (uint8_t)((val >> 8) & 0xFF);
+}
+
+/** @brief 往 txBuf 写入 32-bit 小端序值 */
+static void MBX_PutU32(uint8_t *buf, uint16_t offs, uint32_t val) {
+    buf[offs]     = (uint8_t)(val & 0xFF);
+    buf[offs + 1] = (uint8_t)((val >> 8) & 0xFF);
+    buf[offs + 2] = (uint8_t)((val >> 16) & 0xFF);
+    buf[offs + 3] = (uint8_t)((val >> 24) & 0xFF);
+}
+
+/** @brief 构造 CoE 头 2 字节: number[8:0] + reserved[11:9] + service[15:12] */
+static uint16_t CoE_MakeHeader(uint16_t number, uint8_t service) {
+    return (uint16_t)((number & 0x1FF) | ((uint16_t)service << 12));
+}
+
+/* ── 帧偏移常量 ── */
+#define MBX_OFF_LENGTH      0
+#define MBX_OFF_ADDRESS     2
+#define MBX_OFF_CHANNEL     4
+#define MBX_OFF_TYPE        5
+#define MBX_HDR_SIZE        6
+#define COE_OFF             6
+#define COE_SIZE            2
+#define SDO_OFF             8
+#define SDO_CMD_OFF         8
+#define SDO_IDX_OFF         9
+#define SDO_SUB_OFF         11
+#define SDO_DATA_OFF        12
+#define SDO_HDR_SIZE        8
 
 /**
  * @brief  在对象字典中查找条目
@@ -124,35 +231,35 @@ static OD_Entry_t* OD_Find(uint16_t index, uint8_t subindex)
 static void SDO_SendAbort(uint16_t index, uint8_t subindex, uint32_t abortCode)
 {
     uint8_t txBuf[128];
-    MBX_Header_t *pMbxHdr = (MBX_Header_t *)txBuf;
-    CoE_Header_t *pCoEHdr = (CoE_Header_t *)(txBuf + sizeof(MBX_Header_t));
-    SDO_Header_t *pSDO    = (SDO_Header_t *)(txBuf + sizeof(MBX_Header_t) + sizeof(CoE_Header_t));
+    memset(txBuf, 0, sizeof(txBuf));
 
-    uint16_t dataLen = sizeof(CoE_Header_t) + sizeof(SDO_Header_t);
+    uint16_t dataLen = COE_SIZE + SDO_HDR_SIZE;  /* 2 + 8 = 10 */
 
-    /* 填充邮箱头 */
-    pMbxHdr->length  = dataLen;
-    pMbxHdr->address = 0;
-    pMbxHdr->channel = 0;
-    pMbxHdr->type    = MBX_TYPE_COE;
+    /* 邮箱头 */
+    MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
+    MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
+    txBuf[MBX_OFF_CHANNEL] = 0;
+    txBuf[MBX_OFF_TYPE]    = MBX_TYPE_COE | (g_mbx_counter << 4);
 
-    /* 填充 CoE 头 */
-    pCoEHdr->number   = 0;
-    pCoEHdr->reserved = 0;
-    pCoEHdr->service  = COE_SERVICE_SDO_RESPONSE;
+    /* CoE 头 */
+    MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_RESPONSE));
 
-    /* 填充 SDO Abort */
-    pSDO->command  = SDO_CMD_ABORT;
-    pSDO->index    = index;
-    pSDO->subindex = subindex;
-    pSDO->data     = abortCode;
+    /* SDO Abort */
+    txBuf[SDO_CMD_OFF] = SDO_CMD_ABORT;
+    MBX_PutU16(txBuf, SDO_IDX_OFF, index);
+    txBuf[SDO_SUB_OFF] = subindex;
+    MBX_PutU32(txBuf, SDO_DATA_OFF, abortCode);
 
     /* 等待上次响应被取走 */
     uint16_t timeout = 1000;
     while (ESC_Mbx_TxFull() && timeout--) { HAL_Delay(1); }
 
-    /* 发送 */
-    ESC_Mbx_Write(txBuf, sizeof(MBX_Header_t) + dataLen);
+    if (timeout == 0) {
+        g_dbg_txTimeout++;  /* 记录超时次数 */
+        return;             /* 超时则放弃本次响应，避免覆盖上一个 */
+    }
+
+    ESC_Mbx_Write(txBuf, MBX_HDR_SIZE + dataLen);
 }
 
 /**
@@ -164,95 +271,76 @@ static void SDO_HandleUpload(uint16_t index, uint8_t subindex)
 {
     OD_Entry_t *pEntry = OD_Find(index, subindex);
 
-    /* 对象不存在 */
-    if (pEntry == NULL)
-    {
+    if (pEntry == NULL) {
         SDO_SendAbort(index, subindex, SDO_ABORT_NOT_EXIST);
         return;
     }
-
-    /* 检查访问权限 (只写对象不能读) */
-    if (pEntry->access == OD_ACCESS_WO)
-    {
+    if (pEntry->access == OD_ACCESS_WO) {
         SDO_SendAbort(index, subindex, SDO_ABORT_WRITEONLY);
         return;
     }
 
     uint8_t txBuf[128];
-    MBX_Header_t *pMbxHdr = (MBX_Header_t *)txBuf;
-    CoE_Header_t *pCoEHdr = (CoE_Header_t *)(txBuf + sizeof(MBX_Header_t));
-    SDO_Header_t *pSDO    = (SDO_Header_t *)(txBuf + sizeof(MBX_Header_t) + sizeof(CoE_Header_t));
-
+    memset(txBuf, 0, sizeof(txBuf));
     uint16_t dataLen;
 
-    /* 加速传输 (≤4 字节, 数据直接放在 SDO 头的 data 域) */
     if (pEntry->dataLen <= 4)
     {
-        dataLen = sizeof(CoE_Header_t) + sizeof(SDO_Header_t);
+        dataLen = COE_SIZE + SDO_HDR_SIZE;  /* 2 + 8 = 10 */
 
-        /* 填充邮箱头 */
-        pMbxHdr->length  = dataLen;
-        pMbxHdr->address = 0;
-        pMbxHdr->channel = 0;
-        pMbxHdr->type    = MBX_TYPE_COE;
+        /* 邮箱头 (6 B) */
+        MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
+        MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
+        txBuf[MBX_OFF_CHANNEL] = 0;
+        txBuf[MBX_OFF_TYPE]    = MBX_TYPE_COE | (g_mbx_counter << 4);  /* bits[3:0]=3, counter=回传 */
 
-        /* 填充 CoE 头 */
-        pCoEHdr->number   = 0;
-        pCoEHdr->reserved = 0;
-        pCoEHdr->service  = COE_SERVICE_SDO_RESPONSE;
+        /* CoE 头 (2 B): service=SDO_RESPONSE(3), number=0 */
+        MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_RESPONSE));
 
-        /* 填充 SDO Upload 响应 (加速) */
-        pSDO->command  = SDO_CMD_UPLOAD_EXPEDITED | ((4 - pEntry->dataLen) << 2);
-        pSDO->index    = index;
-        pSDO->subindex = subindex;
-
-        /* 小端序拷贝数据到 data 域 */
-        pSDO->data = 0;
-        memcpy((void *)&pSDO->data, pEntry->pData, pEntry->dataLen);
+        /* SDO Upload Expedited */
+        txBuf[SDO_CMD_OFF] = SDO_CMD_UPLOAD_EXPEDITED | ((4 - pEntry->dataLen) << 2);
+        MBX_PutU16(txBuf, SDO_IDX_OFF, index);
+        txBuf[SDO_SUB_OFF] = subindex;
+        /* data 域: 小端序拷贝 */
+        memcpy(txBuf + SDO_DATA_OFF, pEntry->pData, pEntry->dataLen);
     }
-    /* 普通传输 (>4 字节, 数据跟在 SDO 头后面) */
     else
     {
-        /* 缓冲区溢出检查 */
-        if (pEntry->dataLen > (sizeof(txBuf) - sizeof(MBX_Header_t) - sizeof(CoE_Header_t) - sizeof(SDO_Header_t)))
-        {
+        if (pEntry->dataLen > (sizeof(txBuf) - MBX_HDR_SIZE - COE_SIZE - SDO_HDR_SIZE)) {
             SDO_SendAbort(index, subindex, SDO_ABORT_INTERNAL);
             return;
         }
 
-        dataLen = sizeof(CoE_Header_t) + sizeof(SDO_Header_t) + pEntry->dataLen;
+        dataLen = COE_SIZE + SDO_HDR_SIZE + pEntry->dataLen;
 
-        /* 填充邮箱头 */
-        pMbxHdr->length  = dataLen;
-        pMbxHdr->address = 0;
-        pMbxHdr->channel = 0;
-        pMbxHdr->type    = MBX_TYPE_COE;
+        MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
+        MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
+        txBuf[MBX_OFF_CHANNEL] = 0;
+        txBuf[MBX_OFF_TYPE]    = MBX_TYPE_COE | (g_mbx_counter << 4);
 
-        /* 填充 CoE 头 */
-        pCoEHdr->number   = 0;
-        pCoEHdr->reserved = 0;
-        pCoEHdr->service  = COE_SERVICE_SDO_RESPONSE;
+        MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_RESPONSE));
 
-        /* 填充 SDO Upload 响应 (普通) */
-        pSDO->command  = SDO_CMD_UPLOAD_NORMAL;  /* e=0, s=1 → 指示大小有效 */
-        pSDO->index    = index;
-        pSDO->subindex = subindex;
-        pSDO->data     = pEntry->dataLen;  /* data 域存总字节数 */
+        /* SDO Upload Normal */
+        txBuf[SDO_CMD_OFF] = SDO_CMD_UPLOAD_NORMAL;
+        MBX_PutU16(txBuf, SDO_IDX_OFF, index);
+        txBuf[SDO_SUB_OFF] = subindex;
+        MBX_PutU32(txBuf, SDO_DATA_OFF, pEntry->dataLen);
 
-        /* 数据跟在 SDO 头后 */
-        memcpy(txBuf + sizeof(MBX_Header_t) + sizeof(CoE_Header_t) + sizeof(SDO_Header_t),
-               pEntry->pData, pEntry->dataLen);
+        memcpy(txBuf + MBX_HDR_SIZE + COE_SIZE + SDO_HDR_SIZE, pEntry->pData, pEntry->dataLen);
     }
 
     /* 等待上次响应被取走 */
     uint16_t timeout = 1000;
     while (ESC_Mbx_TxFull() && timeout--) { HAL_Delay(1); }
 
-    /* 调试: 拷贝到全局变量方便 Memory 窗口查看 */
-    memcpy((void*)g_dbg_txbuf, txBuf, 16);
+    if (timeout == 0) {
+        g_dbg_txTimeout++;  /* 记录超时次数 */
+        return;             /* 超时则放弃本次响应，避免覆盖上一个 */
+    }
 
-    /* 发送 */
-    ESC_Mbx_Write(txBuf, sizeof(MBX_Header_t) + dataLen);
+    memcpy((void*)g_dbg_txbuf, txBuf, 16);
+    g_dbg_lastIndex = (uint8_t)(index & 0xFF);
+    ESC_Mbx_Write(txBuf, MBX_HDR_SIZE + dataLen);
 }
 
 /**
@@ -266,74 +354,211 @@ static void SDO_HandleDownload(SDO_Header_t *pSDO)
 
     OD_Entry_t *pEntry = OD_Find(index, subindex);
 
-    /* 对象不存在 */
-    if (pEntry == NULL)
-    {
+    if (pEntry == NULL) {
         SDO_SendAbort(index, subindex, SDO_ABORT_NOT_EXIST);
         return;
     }
-
-    /* 检查访问权限 (只读对象不能写) */
-    if (pEntry->access == OD_ACCESS_RO)
-    {
+    if (pEntry->access == OD_ACCESS_RO) {
         SDO_SendAbort(index, subindex, SDO_ABORT_READONLY);
         return;
     }
 
-    /* 加速下载 (数据在 SDO 头的 data 域) */
     uint8_t cmd = pSDO->command;
-    if (cmd & 0x02)  /* Expedited transfer */
+    if (cmd & 0x02)
     {
         uint8_t dataLen = 4 - ((cmd >> 2) & 0x03);
-
-        /* 长度检查 (写入长度不得超出对象容量) */
-        if (dataLen > pEntry->dataLen)
-        {
+        if (dataLen > pEntry->dataLen) {
             SDO_SendAbort(index, subindex, SDO_ABORT_LEN_MISMATCH);
             return;
         }
-
-        /* 写数据 */
         memcpy(pEntry->pData, (const void *)&pSDO->data, dataLen);
     }
-    /* 普通下载 (暂不支持, 需要分段传输) */
     else
     {
         SDO_SendAbort(index, subindex, SDO_ABORT_UNSUPPORTED);
         return;
     }
 
-    /* 发送确认 */
+    /* 发送确认 — 直接字节写入 */
     uint8_t txBuf[128];
-    MBX_Header_t *pMbxHdr = (MBX_Header_t *)txBuf;
-    CoE_Header_t *pCoEHdr = (CoE_Header_t *)(txBuf + sizeof(MBX_Header_t));
-    SDO_Header_t *pSDOResp = (SDO_Header_t *)(txBuf + sizeof(MBX_Header_t) + sizeof(CoE_Header_t));
+    memset(txBuf, 0, sizeof(txBuf));
 
-    uint16_t dataLen = sizeof(CoE_Header_t) + sizeof(SDO_Header_t);
+    uint16_t dataLen = COE_SIZE + SDO_HDR_SIZE;
 
-    /* 填充邮箱头 */
-    pMbxHdr->length  = dataLen;
-    pMbxHdr->address = 0;
-    pMbxHdr->channel = 0;
-    pMbxHdr->type    = MBX_TYPE_COE;
+    MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
+    MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
+    txBuf[MBX_OFF_CHANNEL] = 0;
+    txBuf[MBX_OFF_TYPE]    = MBX_TYPE_COE | (g_mbx_counter << 4);
 
-    /* 填充 CoE 头 */
-    pCoEHdr->number   = 0;
-    pCoEHdr->reserved = 0;
-    pCoEHdr->service  = COE_SERVICE_SDO_RESPONSE;
+    MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_RESPONSE));
 
-    /* 填充 SDO Download 响应 */
-    pSDOResp->command  = SDO_CMD_DOWNLOAD_RESP;
-    pSDOResp->index    = index;
-    pSDOResp->subindex = subindex;
-    pSDOResp->data     = 0;
+    txBuf[SDO_CMD_OFF] = SDO_CMD_DOWNLOAD_RESP;
+    MBX_PutU16(txBuf, SDO_IDX_OFF, index);
+    txBuf[SDO_SUB_OFF] = subindex;
+    /* data = 0 (already zeroed by memset) */
 
-    /* 等待上次响应被取走 */
     uint16_t timeout = 1000;
     while (ESC_Mbx_TxFull() && timeout--) { HAL_Delay(1); }
 
-    /* 发送 */
-    ESC_Mbx_Write(txBuf, sizeof(MBX_Header_t) + dataLen);
+    if (timeout == 0) {
+        g_dbg_txTimeout++;  /* 记录超时次数 */
+        return;             /* 超时则放弃本次响应，避免覆盖上一个 */
+    }
+
+    ESC_Mbx_Write(txBuf, MBX_HDR_SIZE + dataLen);
+}
+
+/**
+ * @brief  处理 SDO Info 请求 (主站查询对象字典结构)
+ * @param  rxBuf: 接收缓冲区（包含完整邮箱帧）
+ * @note   SDO Info 用于 TwinCAT 扫描对象字典，返回对象列表
+ */
+static void SDO_HandleInfo(uint8_t *rxBuf)
+{
+    uint8_t txBuf[128];
+    memset(txBuf, 0, sizeof(txBuf));
+
+    /* SDO Info 请求格式：CoE头后第1字节是OpCode */
+    uint8_t opCode = rxBuf[MBX_HDR_SIZE + COE_SIZE];
+    g_dbg_sdoInfoOp = opCode;  /* 记录OpCode用于调试 */
+
+    if (opCode == SDO_INFO_OPCODE_LIST_REQ)
+    {
+        /* Get OD List Request - 返回对象字典的索引列表 */
+        /* 构建对象索引列表 (只列出主索引，不含子索引) */
+        uint16_t objList[] = {
+            0x1000, 0x1008, 0x1009, 0x100A, 0x1018,
+            0x1600, 0x1A00, 0x1C00, 0x1C12, 0x1C13,
+            0x2000, 0x2001
+        };
+        uint16_t objCount = sizeof(objList) / sizeof(objList[0]);
+        /* SDO Info List Response格式: OpCode(1) + Incomplete(1) + reserved(2) + FragLeft(2) + ObjCount(2) + List */
+        uint16_t dataLen = 2 + 1 + 1 + 2 + 2 + 2 + objCount * 2;  /* CoE头 + SDO Info数据 */
+
+        /* 邮箱头 */
+        MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
+        MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
+        txBuf[MBX_OFF_CHANNEL] = 0;
+        txBuf[MBX_OFF_TYPE] = MBX_TYPE_COE | (g_mbx_counter << 4);
+
+        /* CoE 头 */
+        MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_INFO));
+
+        /* SDO Info List Response */
+        uint16_t offset = MBX_HDR_SIZE + COE_SIZE;
+        txBuf[offset + 0] = SDO_INFO_OPCODE_LIST_RESP;  /* OpCode */
+        txBuf[offset + 1] = 0x00;                       /* Incomplete = false (所有数据一次返回) */
+        MBX_PutU16(txBuf, offset + 2, 0);               /* Reserved */
+        MBX_PutU16(txBuf, offset + 4, 0);               /* Fragments left = 0 */
+        MBX_PutU16(txBuf, offset + 6, objCount);        /* Object count */
+
+        /* 填充对象索引列表 */
+        for (uint16_t i = 0; i < objCount; i++)
+        {
+            MBX_PutU16(txBuf, offset + 8 + i * 2, objList[i]);
+        }
+
+        /* 等待发送 */
+        uint16_t timeout = 1000;
+        while (ESC_Mbx_TxFull() && timeout--) { HAL_Delay(1); }
+        if (timeout == 0) {
+            g_dbg_txTimeout++;
+            return;
+        }
+
+        memcpy((void*)g_dbg_txbuf, txBuf, 16);
+        ESC_Mbx_Write(txBuf, MBX_HDR_SIZE + dataLen);
+    }
+    else if (opCode == SDO_INFO_OPCODE_OBJ_REQ)
+    {
+        /* Get Object Description Request */
+        uint16_t reqIndex = rxBuf[MBX_HDR_SIZE + COE_SIZE + 1] |
+                           ((uint16_t)rxBuf[MBX_HDR_SIZE + COE_SIZE + 2] << 8);
+
+        /* 简化：返回基本对象描述 */
+        uint16_t dataLen = 2 + 1 + 2 + 2 + 1 + 1;  /* CoE + OpCode + Index + DataType + MaxSub + ObjCode */
+
+        MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
+        MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
+        txBuf[MBX_OFF_CHANNEL] = 0;
+        txBuf[MBX_OFF_TYPE] = MBX_TYPE_COE | (g_mbx_counter << 4);
+
+        MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_INFO));
+
+        uint16_t offset = MBX_HDR_SIZE + COE_SIZE;
+        txBuf[offset + 0] = SDO_INFO_OPCODE_OBJ_RESP;
+        MBX_PutU16(txBuf, offset + 1, reqIndex);
+        MBX_PutU16(txBuf, offset + 3, 0x0007);  /* DataType: UINT32 */
+        txBuf[offset + 5] = 0;  /* MaxSubIndex */
+        txBuf[offset + 6] = 0x07;  /* ObjCode: VAR */
+
+        uint16_t timeout = 1000;
+        while (ESC_Mbx_TxFull() && timeout--) { HAL_Delay(1); }
+        if (timeout == 0) {
+            g_dbg_txTimeout++;
+            return;
+        }
+
+        ESC_Mbx_Write(txBuf, MBX_HDR_SIZE + dataLen);
+    }
+    else if (opCode == SDO_INFO_OPCODE_ENTRY_REQ)
+    {
+        /* Get Entry Description Request */
+        uint16_t reqIndex = rxBuf[MBX_HDR_SIZE + COE_SIZE + 1] |
+                           ((uint16_t)rxBuf[MBX_HDR_SIZE + COE_SIZE + 2] << 8);
+        uint8_t reqSub = rxBuf[MBX_HDR_SIZE + COE_SIZE + 3];
+        uint8_t valueInfo = rxBuf[MBX_HDR_SIZE + COE_SIZE + 4];
+
+        /* 简化：返回基本条目描述 */
+        uint16_t dataLen = 2 + 1 + 2 + 1 + 1 + 2 + 2;
+
+        MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
+        MBX_PutU16(txBuf, MBX_OFF_ADDRESS, 0);
+        txBuf[MBX_OFF_CHANNEL] = 0;
+        txBuf[MBX_OFF_TYPE] = MBX_TYPE_COE | (g_mbx_counter << 4);
+
+        MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_INFO));
+
+        uint16_t offset = MBX_HDR_SIZE + COE_SIZE;
+        txBuf[offset + 0] = SDO_INFO_OPCODE_ENTRY_RESP;
+        MBX_PutU16(txBuf, offset + 1, reqIndex);
+        txBuf[offset + 3] = reqSub;
+        txBuf[offset + 4] = valueInfo;
+        MBX_PutU16(txBuf, offset + 5, 0x0007);  /* DataType: UINT32 */
+        MBX_PutU16(txBuf, offset + 7, 32);  /* BitLength */
+
+        uint16_t timeout = 1000;
+        while (ESC_Mbx_TxFull() && timeout--) { HAL_Delay(1); }
+        if (timeout == 0) {
+            g_dbg_txTimeout++;
+            return;
+        }
+
+        ESC_Mbx_Write(txBuf, MBX_HDR_SIZE + dataLen);
+    }
+    else
+    {
+        /* 不支持的 OpCode - 返回错误 */
+        uint16_t dataLen = COE_SIZE + 8;
+
+        MBX_PutU16(txBuf, MBX_OFF_LENGTH, dataLen);
+        txBuf[MBX_OFF_CHANNEL] = 0;
+        txBuf[MBX_OFF_TYPE] = MBX_TYPE_COE | (g_mbx_counter << 4);
+
+        MBX_PutU16(txBuf, COE_OFF, CoE_MakeHeader(0, COE_SERVICE_SDO_INFO));
+
+        txBuf[MBX_HDR_SIZE + COE_SIZE + 0] = SDO_INFO_OPCODE_ERROR;
+        MBX_PutU32(txBuf, MBX_HDR_SIZE + COE_SIZE + 4, SDO_ABORT_UNSUPPORTED);
+
+        uint16_t timeout = 1000;
+        while (ESC_Mbx_TxFull() && timeout--) { HAL_Delay(1); }
+        if (timeout == 0) {
+            g_dbg_txTimeout++;
+            return;
+        }
+
+        ESC_Mbx_Write(txBuf, MBX_HDR_SIZE + dataLen);
+    }
 }
 
 /* ================================================================
@@ -347,37 +572,19 @@ void CoE_Init(void)
     volatile uint8_t test_mbx = sizeof(MBX_Header_t); // 应该是 6
     volatile uint8_t test_coe = sizeof(CoE_Header_t); // 应该是 2
     volatile uint8_t test_sdo = sizeof(SDO_Header_t); // 应该是 8
+
+    /* 重置调试计数器 */
+    g_req_count = 0;
+    g_dbg_coe_rxCnt = 0;
+    g_dbg_coe_procCnt = 0;
+    g_last_mbx_counter = 0xFF;
+
     __NOP();                                          // 断点设这里
 }
 
 uint8_t CoE_MainTask(void)
 {
     uint8_t rxBuf[128];
-
-    /* ── 强行确保 SM0/SM1 已配: TwinCAT 可能清零, 固件自己补上 ── */
-    {
-        uint8_t sm0Act = 0;
-        uint16_t sm0Base = ESC_REG_SM_BASE + 0 * ESC_REG_SM_STRIDE;
-        ESC_ReadRegister(sm0Base + SM_OFF_ACTIVATE, &sm0Act);
-        if (sm0Act == 0)
-        {
-            /* 只配 SM0+SM1, 不动 SM2/SM3 (TwinCAT 管过程数据) */
-            ESC_SM_Config_t cfg;
-            cfg.startAddr = SM0_DEFAULT_ADDR;
-            cfg.length    = SM0_DEFAULT_LEN;
-            cfg.control   = SM0_DEFAULT_CTRL;
-            cfg.activate  = 1;
-            cfg.pdiCtrl   = 0;
-            ESC_SM_Config(0, &cfg);
-
-            cfg.startAddr = SM1_DEFAULT_ADDR;
-            cfg.length    = SM1_DEFAULT_LEN;
-            cfg.control   = SM1_DEFAULT_CTRL;
-            cfg.activate  = 1;
-            cfg.pdiCtrl   = 0;
-            ESC_SM_Config(1, &cfg);
-        }
-    }
 
     /* ── 诊断: 每周期读取 SM0 原始状态 (观察主站是否配了 SM0) ── */
     {
@@ -396,32 +603,99 @@ uint8_t CoE_MainTask(void)
         return 0;  /* 无事件 */
     }
 
+    g_dbg_sm0FullCnt++;  /* 记录SM0 Full检测次数 */
+
     /* 读取邮箱 */
     if (ESC_Mbx_Read(rxBuf, sizeof(rxBuf)) != HAL_OK)
     {
         g_dbg_coe_state = 0;
+        g_dbg_skipReason = 3;  /* 读邮箱失败 */
         return 0;
     }
 
     g_dbg_coe_rxCnt++;  /* 调试: 收到邮箱数据 */
 
+    /* 调试: 拷贝前 16 字节原始数据 */
+    memcpy((void*)g_dbg_rxbuf, rxBuf, 16);
+
     /* 解析邮箱头 */
     MBX_Header_t *pMbxHdr = (MBX_Header_t *)rxBuf;
+    g_dbg_rxType = pMbxHdr->typeCounter;
+    g_mbx_counter = (pMbxHdr->typeCounter >> 4) & 0x0F;  /* 保存计数器供响应回传 */
+    g_dbg_mbxCounter = g_mbx_counter;  /* 调试：记录当前计数器 */
 
-    /* 只处理 CoE 类型 */
-    if (pMbxHdr->type != MBX_TYPE_COE)
+    /* 检查是否为重复请求（邮箱计数器相同） */
+    if (g_mbx_counter == g_last_mbx_counter)
+    {
+        g_dbg_coe_state = 4;  /* 重复请求 */
+        g_dbg_skipReason = 4; /* 重复请求 */
+        /* 记录到第1/2个请求 */
+        if (g_req_count == 0) {
+            g_dbg_req1Skip = 4;
+            g_req_count++;
+        } else if (g_req_count == 1) {
+            g_dbg_req2Skip = 4;
+            g_req_count++;
+        }
+        return 0;  /* 跳过重复请求 */
+    }
+
+    /* 只处理 CoE 类型 (bits[3:0], mask 掉计数器 bits[7:4]) */
+    if ((pMbxHdr->typeCounter & 0x0F) != MBX_TYPE_COE)
     {
         g_dbg_coe_state = 1;  /* 有事件但非 CoE */
+        g_dbg_skipReason = 1; /* 非CoE */
+        /* 记录到第1/2个请求 */
+        if (g_req_count == 0) {
+            g_dbg_req1Skip = 1;
+            g_req_count++;
+        } else if (g_req_count == 1) {
+            g_dbg_req2Skip = 1;
+            g_req_count++;
+        }
         return 0;
     }
 
     /* 解析 CoE 头 */
     CoE_Header_t *pCoEHdr = (CoE_Header_t *)(rxBuf + sizeof(MBX_Header_t));
+    g_dbg_coeService = *(uint8_t*)pCoEHdr;  /* CoE 头低字节含 service */
+
+    /* 处理 SDO Info 请求 */
+    if (pCoEHdr->service == COE_SERVICE_SDO_INFO)
+    {
+        /* 记录到第1/2个请求 */
+        if (g_req_count == 0) {
+            g_dbg_req1Svc = pCoEHdr->service;
+            g_dbg_req1Skip = 0;  /* SDO Info请求，未跳过 */
+            g_req_count++;
+        } else if (g_req_count == 1) {
+            g_dbg_req2Svc = pCoEHdr->service;
+            g_dbg_req2Skip = 0;  /* SDO Info请求，未跳过 */
+            g_req_count++;
+        }
+
+        SDO_HandleInfo(rxBuf);
+        g_dbg_coe_procCnt++;
+        g_dbg_coe_state = 3;
+        g_last_mbx_counter = g_mbx_counter;
+        return 1;
+    }
 
     /* 只处理 SDO 请求 */
     if (pCoEHdr->service != COE_SERVICE_SDO_REQUEST)
     {
         g_dbg_coe_state = 2;  /* 非 SDO */
+        g_dbg_skipReason = 2; /* 非SDO */
+        /* 记录到第1/2个请求 */
+        if (g_req_count == 0) {
+            g_dbg_req1Svc = pCoEHdr->service;
+            g_dbg_req1Skip = 2;
+            g_req_count++;
+        } else if (g_req_count == 1) {
+            g_dbg_req2Svc = pCoEHdr->service;
+            g_dbg_req2Skip = 2;
+            g_req_count++;
+        }
         return 0;
     }
 
@@ -431,6 +705,27 @@ uint8_t CoE_MainTask(void)
     uint8_t  cmd      = pSDO->command;
     uint16_t index    = pSDO->index;
     uint8_t  subindex = pSDO->subindex;
+
+    g_dbg_reqIndex = index;  /* 记录收到的Index，无论是否处理 */
+
+    /* 记录前2个请求的详细信息 */
+    if (g_req_count == 0) {
+        g_dbg_req1Index = index;
+        g_dbg_req1Counter = g_mbx_counter;
+        g_dbg_req1Svc = pCoEHdr->service;
+        g_dbg_req1Cmd = cmd;  /* 记录SDO命令 */
+        g_dbg_req1Data = pSDO->data;  /* 记录数据域 */
+        g_dbg_req1Skip = 0;  /* SDO请求，未跳过 */
+        g_req_count++;
+    } else if (g_req_count == 1) {
+        g_dbg_req2Index = index;
+        g_dbg_req2Counter = g_mbx_counter;
+        g_dbg_req2Svc = pCoEHdr->service;
+        g_dbg_req2Cmd = cmd;  /* 记录SDO命令 */
+        g_dbg_req2Data = pSDO->data;  /* 记录数据域 */
+        g_dbg_req2Skip = 0;  /* SDO请求，未跳过 */
+        g_req_count++;
+    }
 
     /* 根据命令分发 */
     if (cmd == SDO_CMD_UPLOAD_REQ)
@@ -450,6 +745,8 @@ uint8_t CoE_MainTask(void)
 
     g_dbg_coe_procCnt++;  /* 调试: 成功处理了一次 SDO 请求 */
     g_dbg_coe_state = 3;  /* 已处理 SDO */
+    /* 不清零 skipReason，保留上一次跳过的原因 */
+    g_last_mbx_counter = g_mbx_counter;  /* 记录已处理的邮箱计数器，防止重复处理 */
     return 1;  /* 处理了一次请求 */
 }
 

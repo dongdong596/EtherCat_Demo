@@ -40,6 +40,10 @@ volatile uint8_t  g_dbg_sm0Active = 0;  /* SM0 激活 (1=启用)                
 /* SM1 邮箱诊断 */
 volatile uint16_t g_dbg_sm1Addr   = 0;
 volatile uint8_t  g_dbg_sm1Ctrl   = 0;
+
+/* AL Event Request (每次 SPI 事务自动更新, bit8=1 表示主站写了 SM0 邮箱) */
+volatile uint8_t  g_dbg_irq0 = 0;
+volatile uint8_t  g_dbg_irq1 = 0;
 volatile uint8_t  g_dbg_sm1Status = 0;
 volatile uint8_t  g_dbg_sm1Active = 0;
 
@@ -72,8 +76,8 @@ static void OnEnterState(uint8_t newState)
         m_alError = 0;
         break;
     case ESC_STATE_PREOP:
-        /* 配默认 SM (无主站自测时使用; 有主站时主站会通过网线覆写) */
-        ESC_SM_Init();
+        /* SM 配置由主站通过网线写入 ESC 寄存器, MCU 不主动写
+         * (参考 SSC: MBX_StartMailboxHandler 只读不写) */
         break;
     case ESC_STATE_SAFEOP:
         /* TODO 第5/6步: 验证 SM/FMMU 配置 */
@@ -193,13 +197,12 @@ uint8_t ECAT_MainTask(void)
     g_dbg_alCtrlHi = alCtrlHi;
     g_dbg_callCnt++;
 
-    /* 诊断: 首次进 PREOP 后回读 SM 配置 */
-    if (!s_smDiagDone && (m_currentState == ESC_STATE_PREOP ||
-                          m_currentState == ESC_STATE_SAFEOP ||
-                          m_currentState == ESC_STATE_OP))
-    {
+    /* 诊断: 每周期回读 SM 配置 (持续更新, 观察主站写入时机) */
+    if (m_currentState == ESC_STATE_PREOP ||
+        m_currentState == ESC_STATE_SAFEOP ||
+        m_currentState == ESC_STATE_OP)
+    {	
         ECAT_DiagReadSM();
-        s_smDiagDone = 1;
     }
 
     /* 主站清除错误 */
@@ -225,6 +228,9 @@ uint8_t ECAT_MainTask(void)
     {
         return m_currentState;
     }
+
+    /* 捕获 AL Event Request 到调试变量 (bit8=0x01 表示主站写了 SM0) */
+    ESC_GetIRQStatus((uint8_t *)&g_dbg_irq0, (uint8_t *)&g_dbg_irq1);
 
     return _ECAT_DoTransition(requestedState, ackBit);
 }

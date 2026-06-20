@@ -443,10 +443,10 @@ void AX58100_WriteIdentity(void)
 
     /* --- Revision (SII word 12-13) --- */
     wordAddr = 12;
-    buf[0] = (uint8_t)(0x00010000UL & 0xFF);
-    buf[1] = (uint8_t)((0x00010000UL >> 8) & 0xFF);
-    buf[2] = (uint8_t)((0x00010000UL >> 16) & 0xFF);
-    buf[3] = (uint8_t)((0x00010000UL >> 24) & 0xFF);
+    buf[0] = (uint8_t)(0x00020111UL & 0xFF);
+    buf[1] = (uint8_t)((0x00020111UL >> 8) & 0xFF);
+    buf[2] = (uint8_t)((0x00020111UL >> 16) & 0xFF);
+    buf[3] = (uint8_t)((0x00020111UL >> 24) & 0xFF);
     ESC_WriteRegister(ESC_REG_EEPROM_ADDR,     (uint8_t)(wordAddr & 0xFF));
     ESC_WriteRegister(ESC_REG_EEPROM_ADDR + 1, (uint8_t)(wordAddr >> 8));
     ESC_WriteBlock(ESC_REG_EEPROM_DATA, buf, 4);
@@ -595,6 +595,38 @@ void ESC_Diagnose(void)
     ESC_ReadRegister (0x1F00, (uint8_t *)&testRd);
 
     __NOP();    /* 断点: 观察上面所有变量 */
+}
+
+/**
+ * @brief  邮箱自测: SPI 写 SM0 数据区 → 读状态 → 读回数据
+ * @note   设断点在最后的 __NOP(), 观察:
+ *         sm0StsBefore=0x00(空), sm0StsAfter=0x08(满), match=8(数据一致)
+ */
+void ESC_MbxSelfTest(void)
+{
+    volatile uint8_t sm0StsBefore = 0;
+    volatile uint8_t sm0StsAfter  = 0;
+    volatile uint8_t testData[8]  = {0xA5, 0x5A, 0x01, 0x02, 0x03, 0x04, 0x55, 0xAA};
+    volatile uint8_t readBack[8]  = {0};
+    volatile uint8_t match = 0;
+    uint8_t i;
+
+    /* 1. 读 SM0 当前状态 */
+    ESC_ReadRegister(0x0805, (uint8_t *)&sm0StsBefore);
+
+    /* 2. SPI 写测试数据到 SM0 物理区 (0x1000) */
+    ESC_WriteBlock(0x1000, (uint8_t *)testData, 8);
+
+    /* 3. 再读 SM0 状态 — 应看到 bit3=1 (邮箱满) */
+    ESC_ReadRegister(0x0805, (uint8_t *)&sm0StsAfter);
+
+    /* 4. 读回数据验证 */
+    ESC_ReadBlock(0x1000, (uint8_t *)readBack, 8);
+    for (i = 0; i < 8; i++) {
+        if (readBack[i] == testData[i]) match++;
+    }
+
+    __NOP();    /* 断点: sm0StsBefore/After >0 说明状态检测正常 */
 }
 
 /* ================================================================
@@ -746,17 +778,35 @@ uint8_t ESC_Mbx_TxFull(void)
 HAL_StatusTypeDef ESC_Mbx_Read(uint8_t *pBuf, uint16_t len)
 {
     uint16_t sm0Addr, sm0Len, rdLen;
+    HAL_StatusTypeDef status;
 
     if (pBuf == NULL || len == 0) return HAL_ERROR;
 
     ESC_Mbx_GetSM0Info(&sm0Addr, &sm0Len);
-    if (sm0Addr == 0 || sm0Len == 0) return HAL_ERROR;  /* 主站未配 SM0 */
+    if (sm0Addr == 0 || sm0Len == 0) return HAL_ERROR;
 
-    rdLen = sm0Len;  /* 必须读满整个 SM0 区, 读到末字节才清 full */
+    rdLen = sm0Len;
     if (rdLen > ESC_MAX_BLOCK_SIZE) rdLen = ESC_MAX_BLOCK_SIZE;
-    if (rdLen < len) rdLen = len;   /* 至少满足调用者请求 */
+    if (rdLen < len) rdLen = len;
 
-    return ESC_ReadBlock(sm0Addr, pBuf, rdLen);
+    status = ESC_ReadBlock(sm0Addr, pBuf, rdLen);
+    if (status != HAL_OK) return status;
+
+    /* ── 对应 SSC MBX_CheckAndCopyMailbox: 读完后若缓冲区仍锁, 读末 2 字节解锁 ── */
+    {
+        uint8_t sm0Sts = 0;
+        if (ESC_ReadRegister(ESC_REG_SM_BASE + 0 * ESC_REG_SM_STRIDE + SM_OFF_STATUS, &sm0Sts) == HAL_OK)
+        {
+            if (sm0Sts & SM_STATUS_MBX_FULL)
+            {
+                uint8_t dummy[2];
+                ESC_ReadBlock(sm0Addr + sm0Len - 2, dummy, 2);  /* 读末 2 字节触发解锁 */
+                (void)dummy;
+            }
+        }
+    }
+
+    return HAL_OK;
 }
 
 /**
@@ -771,19 +821,42 @@ HAL_StatusTypeDef ESC_Mbx_Write(uint8_t *pBuf, uint16_t len)
     uint16_t sm1Addr, sm1Len;
     static uint8_t txbuf[ESC_MAX_BLOCK_SIZE];
     uint16_t i;
+    HAL_StatusTypeDef status;
 
     if (pBuf == NULL || len == 0) return HAL_ERROR;
 
     ESC_Mbx_GetSM1Info(&sm1Addr, &sm1Len);
-    if (sm1Addr == 0 || sm1Len == 0) return HAL_ERROR;  /* 主站未配 SM1 */
-
-    if (len > sm1Len) return HAL_ERROR;     /* 数据不能超过 SM 区 */
+    if (sm1Addr == 0 || sm1Len == 0) return HAL_ERROR;
+    if (len > sm1Len) return HAL_ERROR;
     if (sm1Len > ESC_MAX_BLOCK_SIZE) return HAL_ERROR;
 
-    /* 必须写满整个 SM1 区, 写到末字节 ESC 才会置 full.
-     * 有效数据放前 len 字节, 其余补 0. */
     for (i = 0; i < len; i++)        txbuf[i] = pBuf[i];
     for (i = len; i < sm1Len; i++)   txbuf[i] = 0x00;
 
-    return ESC_WriteBlock(sm1Addr, txbuf, sm1Len);
+    status = ESC_WriteBlock(sm1Addr, txbuf, sm1Len);
+    if (status != HAL_OK) return status;
+
+    /* ── 对应 SSC MBX_CopyToSendMailbox: 写完后若 full 标志未置, 补写末 2 字节 ── */
+    {
+        uint8_t sm1Sts = 0;
+        if (ESC_ReadRegister(ESC_REG_SM_BASE + 1 * ESC_REG_SM_STRIDE + SM_OFF_STATUS, &sm1Sts) == HAL_OK)
+        {
+            if (!(sm1Sts & SM_STATUS_MBX_FULL))
+            {
+                uint8_t trigger[2] = {0, 0};
+                /* 若有效数据未对齐到末 2 字节, 把尾部数据拷贝到 trigger */
+                uint16_t written = len;
+                uint16_t bytesLeft = sm1Len - written;
+                if (bytesLeft < 2)
+                {
+                    uint16_t lastAligned = (written / 2) * 2;
+                    trigger[0] = pBuf[lastAligned];
+                    if (lastAligned + 1 < written) trigger[1] = pBuf[lastAligned + 1];
+                }
+                ESC_WriteBlock(sm1Addr + sm1Len - 2, trigger, 2);
+            }
+        }
+    }
+
+    return HAL_OK;
 }

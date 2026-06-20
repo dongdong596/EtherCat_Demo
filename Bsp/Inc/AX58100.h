@@ -129,33 +129,42 @@ extern "C" {
 #define SM_STATUS_MBX_FULL      (1U << 3) /* 邮箱满 / 缓冲区有数据         */
 
 /*
- * SM 控制寄存器 (SM_OFF_CONTROL) 位定义:
+ * SM 控制寄存器 (SM_OFF_CONTROL) 位定义 (AX58100 数据手册):
  *
- *   Bit [0]:    方向 (Direction)
- *                 0 = 主站写 → PDI 读  (ECAT → MCU)
- *                 1 = PDI 写 → 主站读  (MCU  → ECAT)
- *   Bit [2:1]:  模式 (Mode)
- *                 00 = 缓冲模式   — 过程数据用 (SM2/SM3)
- *                 01 = 3 缓冲模式 — 较少使用
- *                 10 = 邮箱模式   — CoE 通信用 (SM0/SM1)
+ *   Bit [1:0]:  模式 (Operation Mode)
+ *                 00 = 缓冲模式 (3-buffer)
+ *                 01 = 保留
+ *                 10 = 邮箱模式 (Single buffer)
  *                 11 = 保留
- *   Bit [7:3]:  保留 (写 0)
+ *   Bit [3:2]:  方向 (Direction)
+ *                 00 = ECAT 读, PDI 写  (S→M)
+ *                 01 = ECAT 写, PDI 读  (M→S)
+ *                 10 = 保留
+ *                 11 = 保留
+ *   Bit [4]:    ECAT 中断使能
+ *   Bit [5]:    PDI 中断使能
+ *   Bit [6]:    看门狗触发使能
+ *   Bit [7]:    保留, 写 0
  */
 
-/* ── 方向 ── */
-#define SM_CTRL_DIR_ECAT2PDI    0x00U   /* 主站写, PDI 读 (M→S)           */
-#define SM_CTRL_DIR_PDI2ECAT    0x01U   /* PDI 写, 主站读 (S→M)           */
+/* ── 方向 (bit[3:2]) ── */
+#define SM_CTRL_DIR_PDI2ECAT    0x00U   /* ECAT 读, PDI 写 (S→M)            */
+#define SM_CTRL_DIR_ECAT2PDI    0x04U   /* ECAT 写, PDI 读 (M→S)            */
 
-/* ── 模式 (已左移到 bit[2:1] 位置, 直接 | 方向即可) ── */
-#define SM_CTRL_MODE_BUFFERED   (0x00U << 1)  /* 缓冲模式   (0x00)         */
-#define SM_CTRL_MODE_3BUFFER    (0x01U << 1)  /* 3 缓冲模式 (0x02)         */
-#define SM_CTRL_MODE_MAILBOX    (0x02U << 1)  /* 邮箱模式   (0x04)         */
+/* ── 模式 (bit[1:0]) ── */
+#define SM_CTRL_MODE_BUFFERED   0x00U   /* 缓冲模式                          */
+#define SM_CTRL_MODE_MAILBOX    0x02U   /* 邮箱模式 (Single buffer)          */
 
-/* ── 常用组合 (方向 | 模式) ── */
-#define SM_CTRL_M2S_MAILBOX     (SM_CTRL_MODE_MAILBOX | SM_CTRL_DIR_ECAT2PDI)  /* 0x04 */
-#define SM_CTRL_S2M_MAILBOX     (SM_CTRL_MODE_MAILBOX | SM_CTRL_DIR_PDI2ECAT)  /* 0x05 */
-#define SM_CTRL_M2S_BUFFERED    (SM_CTRL_MODE_BUFFERED | SM_CTRL_DIR_ECAT2PDI) /* 0x00 */
-#define SM_CTRL_S2M_BUFFERED    (SM_CTRL_MODE_BUFFERED | SM_CTRL_DIR_PDI2ECAT) /* 0x01 */
+/* ── 中断 / 看门狗 (bit[6:4]) ── */
+#define SM_CTRL_ECAT_IRQ        (1U << 4)
+#define SM_CTRL_PDI_IRQ         (1U << 5)
+#define SM_CTRL_WD_TRIGGER      (1U << 6)
+
+/* ── 常用组合 (方向 | 模式 | 中断) ── */
+#define SM_CTRL_M2S_MAILBOX     (SM_CTRL_MODE_MAILBOX | SM_CTRL_DIR_ECAT2PDI | SM_CTRL_PDI_IRQ)  /* 0x26 */
+#define SM_CTRL_S2M_MAILBOX     (SM_CTRL_MODE_MAILBOX | SM_CTRL_DIR_PDI2ECAT | SM_CTRL_PDI_IRQ)  /* 0x22 */
+#define SM_CTRL_M2S_BUFFERED    (SM_CTRL_MODE_BUFFERED | SM_CTRL_DIR_ECAT2PDI | SM_CTRL_PDI_IRQ | SM_CTRL_WD_TRIGGER) /* 0x64 */
+#define SM_CTRL_S2M_BUFFERED    (SM_CTRL_MODE_BUFFERED | SM_CTRL_DIR_PDI2ECAT | SM_CTRL_PDI_IRQ)  /* 0x20 */
 
 /* ── 向后兼容旧宏名 ── */
 #define SM_DIR_WRITE            SM_CTRL_DIR_ECAT2PDI
@@ -339,6 +348,7 @@ HAL_StatusTypeDef AX58100_ReadESCInfo(void);
 void ESC_TestReadID(void);         /* 读 ESC 类型/版本, 验证通信         */
 void ESC_TestReadWrite(void);      /* 读写用户 RAM 区域, 验证 PDI 功能   */
 void ESC_Diagnose(void);           /* 诊断: 一口气读关键寄存器            */
+void ESC_MbxSelfTest(void);        /* 邮箱自测: 写SM0→读状态→读回      */
 
 /* ================================================================
  * §11 API: 看门狗 / 过程数据

@@ -34,12 +34,12 @@ extern "C" {
  * §1  邮箱协议 (Mailbox Header, ETG.1000.4)
  * ================================================================ */
 
-/** @brief 邮箱头 (6 字节, 小端序) */
+/** @brief 邮箱头 (6 字节, 小端序, ETG.1000.4) */
 typedef struct __attribute__((packed)) {
     uint16_t length;        /* 数据长度 (不含邮箱头本身)            */
     uint16_t address;       /* 从站地址 (0=广播)                   */
     uint8_t  channel;       /* 通道 (bits[5:0]) + 优先级(bits[7:6]) */
-    uint8_t  type;          /* 邮箱类型: 0x03=CoE, 0x04=FoE...     */
+    uint8_t  typeCounter;   /* bits[3:0]=类型, bits[7:4]=计数器     */
 } MBX_Header_t;
 
 /* 邮箱类型编码 */
@@ -130,6 +130,21 @@ typedef struct __attribute__((packed)) {
 #define SDO_ABORT_DATA_LOCAL        0x08000021UL  /* 本地控制错误          */
 #define SDO_ABORT_DATA_STATE        0x08000022UL  /* 当前状态下无法访问    */
 #define SDO_ABORT_NO_OD             0x08000023UL  /* 对象字典不存在        */
+
+/* ── SDO Info OpCodes (ETG.1000.6 §5.6.2) ── */
+#define SDO_INFO_OPCODE_LIST_REQ        0x01U  /* Get OD List Request       */
+#define SDO_INFO_OPCODE_LIST_RESP       0x02U  /* Get OD List Response      */
+#define SDO_INFO_OPCODE_OBJ_REQ         0x03U  /* Get Object Description Req*/
+#define SDO_INFO_OPCODE_OBJ_RESP        0x04U  /* Get Object Description Rsp*/
+#define SDO_INFO_OPCODE_ENTRY_REQ       0x05U  /* Get Entry Description Req */
+#define SDO_INFO_OPCODE_ENTRY_RESP      0x06U  /* Get Entry Description Rsp */
+#define SDO_INFO_OPCODE_ERROR           0x07U  /* SDO Info Error Response   */
+
+/* SDO Info List Types */
+#define SDO_INFO_LIST_TYPE_LENGTH       0x00U  /* All objects, length only  */
+#define SDO_INFO_LIST_TYPE_ALL          0x01U  /* All objects, with data    */
+#define SDO_INFO_LIST_TYPE_RXPDO        0x02U  /* RxPDO mappable objects    */
+#define SDO_INFO_LIST_TYPE_TXPDO        0x03U  /* TxPDO mappable objects    */
 
 /* ================================================================
  * §4  对象字典数据结构
