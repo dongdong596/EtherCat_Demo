@@ -23,28 +23,22 @@
 static uint8_t m_currentState = ESC_STATE_INIT;  /* 当前 EtherCAT 状态 */
 static uint8_t m_alError     = 0;                /* AL Status Code 低字节 */
 
-/* 调试变量 — Watch 窗口可直接观察 */
+/* Watch 调试变量: 状态机和邮箱 SM 配置 */
 volatile uint8_t g_dbg_alCtrlLo = 0;  /* 最近一次读到的 AL Control [7:0]        */
 volatile uint8_t g_dbg_alCtrlHi = 0;  /* 最近一次读到的 AL Control [15:8]       */
 volatile uint8_t g_dbg_alStatus = 0;  /* 最近一次写入 AL Status [7:0]           */
 volatile uint8_t g_dbg_callCnt  = 0;  /* ECAT_MainTask 调用次数 (溢出回绕)      */
-volatile uint8_t g_dbg_pdiErr   = 0;  /* PDI 错误计数 (0x030D)                  */
 
-/* SM0 邮箱诊断: 主站实际配了什么 */
+/* SM0/SM1 邮箱诊断: 确认 TwinCAT 写入的邮箱窗口和控制字 */
 volatile uint16_t g_dbg_sm0Addr   = 0;  /* SM0 实际物理起始地址                 */
 volatile uint16_t g_dbg_sm0Len    = 0;  /* SM0 实际长度                          */
-volatile uint8_t  g_dbg_sm0Ctrl   = 0;  /* SM0 控制寄存器 (bit0=方向 bit[2:1]=模式) */
-volatile uint8_t  g_dbg_sm0Status = 0;  /* SM0 状态寄存器 (bit3=邮箱满)          */
+volatile uint8_t  g_dbg_sm0Ctrl   = 0;  /* SM0 control byte                      */
+volatile uint16_t g_dbg_sm0Status = 0;  /* SM0 control/status word               */
 volatile uint8_t  g_dbg_sm0Active = 0;  /* SM0 激活 (1=启用)                     */
-
-/* SM1 邮箱诊断 */
 volatile uint16_t g_dbg_sm1Addr   = 0;
+volatile uint16_t g_dbg_sm1Len    = 0;
 volatile uint8_t  g_dbg_sm1Ctrl   = 0;
-
-/* AL Event Request (每次 SPI 事务自动更新, bit8=1 表示主站写了 SM0 邮箱) */
-volatile uint8_t  g_dbg_irq0 = 0;
-volatile uint8_t  g_dbg_irq1 = 0;
-volatile uint8_t  g_dbg_sm1Status = 0;
+volatile uint16_t g_dbg_sm1Status = 0;
 volatile uint8_t  g_dbg_sm1Active = 0;
 
 /* 过程数据缓冲区 (SM2 输出 主→从, SM3 输入 从→主) */
@@ -183,8 +177,6 @@ void ECAT_Init(void)
 uint8_t ECAT_MainTask(void)
 {
     uint8_t alCtrlLo, alCtrlHi, requestedState, ackBit, errAckBit;
-    static uint8_t s_smDiagDone = 0;
-
     /* 读 AL Control (0x0120, 主站通过网线写, PDI 只读) */
     if (ESC_ReadRegister(ESC_REG_AL_CONTROL,     &alCtrlLo) != HAL_OK) return m_currentState;
     if (ESC_ReadRegister(ESC_REG_AL_CONTROL + 1, &alCtrlHi) != HAL_OK) return m_currentState;
@@ -229,9 +221,6 @@ uint8_t ECAT_MainTask(void)
         return m_currentState;
     }
 
-    /* 捕获 AL Event Request 到调试变量 (bit8=0x01 表示主站写了 SM0) */
-    ESC_GetIRQStatus((uint8_t *)&g_dbg_irq0, (uint8_t *)&g_dbg_irq1);
-
     return _ECAT_DoTransition(requestedState, ackBit);
 }
 
@@ -253,6 +242,7 @@ void ECAT_DiagReadSM(void)
 
     ESC_SM_ReadConfig(1, &cfg);
     g_dbg_sm1Addr   = cfg.startAddr;
+    g_dbg_sm1Len    = cfg.length;
     g_dbg_sm1Ctrl   = cfg.control;
     g_dbg_sm1Status = cfg.status;
     g_dbg_sm1Active = cfg.activate;

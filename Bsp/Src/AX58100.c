@@ -225,7 +225,7 @@ void ESC_GetIRQStatus(uint8_t *irq0, uint8_t *irq1)
 
 /* ================================================================
  * §C  SyncManager 管理
- *     ESC 有 8 个 SM 通道 (0~7), 每通道 16 字节配置空间.
+ *     ESC 有 8 个 SM 通道 (0~7), 每通道 8 字节配置空间.
  *
  *     典型分配:
  *       SM0: 邮箱 M→S  0x1000  128B  (主站 → 从站 邮箱命令)
@@ -302,7 +302,8 @@ void ESC_SM_ReadConfig(uint8_t smIdx, ESC_SM_Config_t *pCfg)
     pCfg->length    = (uint16_t)buf[SM_OFF_LENGTH]
                     | ((uint16_t)buf[SM_OFF_LENGTH + 1] << 8);
     pCfg->control   = buf[SM_OFF_CONTROL];
-    pCfg->status    = buf[SM_OFF_STATUS];
+    pCfg->status    = (uint16_t)buf[SM_OFF_CONTROL]
+                    | ((uint16_t)buf[SM_OFF_STATUS] << 8);
     pCfg->activate  = buf[SM_OFF_ACTIVATE];
     pCfg->pdiCtrl   = buf[SM_OFF_PDI_CTRL];
 }
@@ -341,7 +342,7 @@ void ESC_ReadSMConfig(uint8_t smIdx, uint16_t *pStartAddr, uint16_t *pLength,
     *pStartAddr = cfg.startAddr;
     *pLength    = cfg.length;
     *pControl   = cfg.control;
-    if (pStatus) *pStatus = cfg.status;
+    if (pStatus) *pStatus = (uint8_t)(cfg.status >> 8);
 }
 
 /**
@@ -696,7 +697,8 @@ void ESC_WriteInputData(uint8_t *pBuf, uint16_t len)
  *     SM0: 邮箱输出 (主→从) 0x1000 128B —— 主站写命令, MCU 读
  *     SM1: 邮箱输入 (从→主) 0x1080 128B —— MCU 写响应, 主站读
  *
- *     full 标志在 SM 状态寄存器 (SM_OFF_STATUS) 的 bit3:
+ *     full 标志按 16 位 control/status word 判断:
+ *       word = control | (status << 8), full = 0x0800
  *       - 读邮箱时必须访问到 SM 区末字节, ESC 才清 full (允许收下一条)
  *       - 写邮箱时必须写到 SM 区末字节, ESC 才置 full (通知主站取走)
  *
@@ -705,14 +707,17 @@ void ESC_WriteInputData(uint8_t *pBuf, uint16_t len)
  * ================================================================ */
 
 /**
- * @brief  读某个 SM 通道的状态寄存器 bit3 (邮箱满标志)
+ * @brief  读某个 SM 通道的 mailbox full 标志
+ * @note   与 SSC 一致, 读取 control/status 16 位 word 后判断 0x0800。
  */
 static uint8_t ESC_SM_MbxFull(uint8_t smIdx)
 {
     uint16_t smBase = ESC_REG_SM_BASE + (uint16_t)smIdx * ESC_REG_SM_STRIDE;
-    uint8_t  status = 0;
+    uint8_t  buf[2];
+    uint16_t status;
 
-    if (ESC_ReadRegister(smBase + SM_OFF_STATUS, &status) != HAL_OK) return 0;
+    if (ESC_ReadBlock(smBase + SM_OFF_CONTROL, buf, 2) != HAL_OK) return 0;
+    status = (uint16_t)buf[0] | ((uint16_t)buf[1] << 8);
     return (status & SM_STATUS_MBX_FULL) ? 1 : 0;
 }
 
@@ -773,7 +778,7 @@ uint8_t ESC_Mbx_TxFull(void)
  * @param  pBuf: 输出缓冲区
  * @param  len:  缓冲区大小
  * @retval HAL_OK / HAL_ERROR
- * @note   读满整个 SM0 区, 读到末字节 ESC 自动清 full
+ * @note   先读实际 SM0 邮箱区, 若 ESC 仍显示 full, 再读末 2 字节解锁。
  */
 HAL_StatusTypeDef ESC_Mbx_Read(uint8_t *pBuf, uint16_t len)
 {
@@ -787,16 +792,17 @@ HAL_StatusTypeDef ESC_Mbx_Read(uint8_t *pBuf, uint16_t len)
 
     rdLen = sm0Len;
     if (rdLen > ESC_MAX_BLOCK_SIZE) rdLen = ESC_MAX_BLOCK_SIZE;
-    if (rdLen < len) rdLen = len;
+    if (rdLen > len) rdLen = len;
 
     status = ESC_ReadBlock(sm0Addr, pBuf, rdLen);
     if (status != HAL_OK) return status;
 
     /* ── 对应 SSC MBX_CheckAndCopyMailbox: 读完后若缓冲区仍锁, 读末 2 字节解锁 ── */
     {
-        uint8_t sm0Sts = 0;
-        if (ESC_ReadRegister(ESC_REG_SM_BASE + 0 * ESC_REG_SM_STRIDE + SM_OFF_STATUS, &sm0Sts) == HAL_OK)
+        uint8_t sm0StsBuf[2];
+        if (ESC_ReadBlock(ESC_REG_SM_BASE + 0 * ESC_REG_SM_STRIDE + SM_OFF_CONTROL, sm0StsBuf, 2) == HAL_OK)
         {
+            uint16_t sm0Sts = (uint16_t)sm0StsBuf[0] | ((uint16_t)sm0StsBuf[1] << 8);
             if (sm0Sts & SM_STATUS_MBX_FULL)
             {
                 uint8_t dummy[2];
@@ -814,13 +820,11 @@ HAL_StatusTypeDef ESC_Mbx_Read(uint8_t *pBuf, uint16_t len)
  * @param  pBuf: 要写入的响应数据
  * @param  len:  数据长度 (≤ SM1 长度)
  * @retval HAL_OK / HAL_ERROR
- * @note   写满整个 SM1 区, 写到末字节 ESC 置 full 通知主站
+ * @note   只写实际响应长度; 若 ESC 未置 full, 再补写 SM1 末 2 字节触发。
  */
 HAL_StatusTypeDef ESC_Mbx_Write(uint8_t *pBuf, uint16_t len)
 {
     uint16_t sm1Addr, sm1Len;
-    static uint8_t txbuf[ESC_MAX_BLOCK_SIZE];
-    uint16_t i;
     HAL_StatusTypeDef status;
 
     if (pBuf == NULL || len == 0) return HAL_ERROR;
@@ -828,32 +832,32 @@ HAL_StatusTypeDef ESC_Mbx_Write(uint8_t *pBuf, uint16_t len)
     ESC_Mbx_GetSM1Info(&sm1Addr, &sm1Len);
     if (sm1Addr == 0 || sm1Len == 0) return HAL_ERROR;
     if (len > sm1Len) return HAL_ERROR;
-    if (sm1Len > ESC_MAX_BLOCK_SIZE) return HAL_ERROR;
-
-    for (i = 0; i < len; i++)        txbuf[i] = pBuf[i];
-    for (i = len; i < sm1Len; i++)   txbuf[i] = 0x00;
-
-    status = ESC_WriteBlock(sm1Addr, txbuf, sm1Len);
+    status = ESC_WriteBlock(sm1Addr, pBuf, len);
     if (status != HAL_OK) return status;
 
     /* ── 对应 SSC MBX_CopyToSendMailbox: 写完后若 full 标志未置, 补写末 2 字节 ── */
     {
-        uint8_t sm1Sts = 0;
-        if (ESC_ReadRegister(ESC_REG_SM_BASE + 1 * ESC_REG_SM_STRIDE + SM_OFF_STATUS, &sm1Sts) == HAL_OK)
+        uint8_t sm1StsBuf[2];
+        if (ESC_ReadBlock(ESC_REG_SM_BASE + 1 * ESC_REG_SM_STRIDE + SM_OFF_CONTROL, sm1StsBuf, 2) == HAL_OK)
         {
+            uint16_t sm1Sts = (uint16_t)sm1StsBuf[0] | ((uint16_t)sm1StsBuf[1] << 8);
             if (!(sm1Sts & SM_STATUS_MBX_FULL))
             {
                 uint8_t trigger[2] = {0, 0};
                 /* 若有效数据未对齐到末 2 字节, 把尾部数据拷贝到 trigger */
-                uint16_t written = len;
-                uint16_t bytesLeft = sm1Len - written;
+                uint16_t bytesLeft = (uint16_t)(sm1Len - len);
                 if (bytesLeft < 2)
                 {
-                    uint16_t lastAligned = (written / 2) * 2;
+                    uint16_t lastAligned = (uint16_t)((len / 2U) * 2U);
+                    if (lastAligned >= len && len >= 2U)
+                    {
+                        lastAligned = (uint16_t)(len - 2U);
+                    }
                     trigger[0] = pBuf[lastAligned];
-                    if (lastAligned + 1 < written) trigger[1] = pBuf[lastAligned + 1];
+                    if ((lastAligned + 1U) < len) trigger[1] = pBuf[lastAligned + 1U];
                 }
-                ESC_WriteBlock(sm1Addr + sm1Len - 2, trigger, 2);
+                status = ESC_WriteBlock((uint16_t)(sm1Addr + sm1Len - 2U), trigger, 2);
+                if (status != HAL_OK) return status;
             }
         }
     }

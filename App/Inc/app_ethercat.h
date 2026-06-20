@@ -10,12 +10,9 @@
   *    BSP/AX58100.c       →  ESC 驱动 (寄存器读写 / SM 管理)
   *    Core/spi.c          →  SPI 硬件抽象
   *
-  *  开发进度:
-  *    ✅ 第4步: 状态机
-  *    ✅ 第5步: SyncManager 配置 (迁移至 BSP 层 ESC_SM_Init)
-  *    ⬜ 第6步: CoE 邮箱协议
-  *    ⬜ 第7步: 过程数据
-  *    ⬜ 第8步: ESI/XML 从站描述文件
+ *  当前进度:
+ *    已完成状态机、SyncManager 基础配置、CoE 邮箱和 CoE Online。
+ *    下一阶段重点是 PDO 映射和 OP 态过程数据交换。
   ******************************************************************************
   */
 
@@ -39,24 +36,20 @@ uint8_t ECAT_SelfTest(void);            /* 自测: 手动模拟全状态来回, 
 void    ECAT_ProcessDataExchange(void);  /* 过程数据交换: OP 态每周期调用        */
 void    ECAT_DiagReadSM(void);           /* 诊断: 回读 SM0/SM1 实际配置          */
 
-/* ── 调试变量 (Watch 窗口直接观察) ── */
+/* ── Watch 调试变量: 状态机和 SM0/SM1 邮箱配置 ── */
 extern volatile uint8_t  g_dbg_alCtrlLo;
 extern volatile uint8_t  g_dbg_alCtrlHi;
 extern volatile uint8_t  g_dbg_alStatus;
 extern volatile uint8_t  g_dbg_callCnt;
-extern volatile uint8_t  g_dbg_pdiErr;
 extern volatile uint16_t g_dbg_sm0Addr;
 extern volatile uint16_t g_dbg_sm0Len;
 extern volatile uint8_t  g_dbg_sm0Ctrl;
-extern volatile uint8_t  g_dbg_sm0Status;
+extern volatile uint16_t g_dbg_sm0Status;
 extern volatile uint8_t  g_dbg_sm0Active;
 extern volatile uint16_t g_dbg_sm1Addr;
+extern volatile uint16_t g_dbg_sm1Len;
 extern volatile uint8_t  g_dbg_sm1Ctrl;
-
-/* ── AL Event Request (每次 SPI 事务自动更新) ── */
-extern volatile uint8_t  g_dbg_irq0;
-extern volatile uint8_t  g_dbg_irq1;
-extern volatile uint8_t  g_dbg_sm1Status;
+extern volatile uint16_t g_dbg_sm1Status;
 extern volatile uint8_t  g_dbg_sm1Active;
 
 #ifdef __cplusplus

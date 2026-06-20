@@ -28,9 +28,9 @@
   *    ✅ 第3步: ESC 完整信息读取 (AX58100_ReadESCInfo)
   *    ✅ 第4步: 状态机
   *    ✅ 第5步: SyncManager 配置
-  *    ⬜ 第6步: CoE 邮箱协议
-  *    ⬜ 第7步: 过程数据
-  *    ⬜ 第8步: ESI/XML 从站描述文件
+  *    ✅ 第6步: CoE 邮箱协议 / CoE Online
+  *    ⬜ 第7步: PDO 过程数据映射
+  *    ✅ 第8步: ESI/XML 从站描述文件
   ******************************************************************************
   */
 
@@ -95,12 +95,12 @@ extern "C" {
 #define ESC_REG_FMMU_BASE       0x0600U /* FMMU0 起始                     */
 #define ESC_REG_FMMU_STRIDE     0x0010U /* 每 FMMU 16 字节                */
 
-/* ── 2.8  SyncManager (0x0800~0x087F, 8 通道 × 16 字节) ── */
+/* ── 2.8  SyncManager (0x0800~0x083F, 8 通道 × 8 字节) ── */
 #define ESC_REG_SM_BASE         0x0800U /* SM0 起始地址                   */
-#define ESC_REG_SM_STRIDE       0x0010U /* 每通道 16 字节                 */
+#define ESC_REG_SM_STRIDE       0x0008U /* 每通道 8 字节                  */
 
 /*
- * SM 通道寄存器布局 (相对 SM_BASE + N*0x10):
+ * SM 通道寄存器布局 (相对 SM_BASE + N*0x08):
  *   Offset   Size  Access  Description
  *   ──────   ────  ──────  ────────────────────────────
  *   0x00     2B    R/W     物理起始地址 (Little-Endian)
@@ -109,7 +109,11 @@ extern "C" {
  *   0x05     1B    R       状态寄存器
  *   0x06     1B    R/W     激活 (写 1 启用该 SM 通道)
  *   0x07     1B    R/W     PDI 控制
- *   0x08~0x0F 8B   —       保留
+ *
+ * 重要:
+ *   AX58100/SSC 的 SyncManager 配置块是 8 字节一组。
+ *   SM0=0x0800, SM1=0x0808, SM2=0x0810, SM3=0x0818。
+ *   这里不能按 0x10 步进, 否则 SM1 会误读/误写到 SM2。
  */
 
 /* SM 内部偏移 */
@@ -121,12 +125,18 @@ extern "C" {
 #define SM_OFF_PDI_CTRL         0x07U   /* PDI 控制      (1B)             */
 
 /*
- * SM 状态寄存器 (SM_OFF_STATUS) 位定义:
- *   Bit [3]:  Mailbox/Buffer full —— 缓冲区有数据
- *               邮箱模式 SM0(M→S): 1 = 主站写入了新命令, 待 PDI 读取
- *               邮箱模式 SM1(S→M): 1 = PDI 写入的响应主站尚未取走
+ * SM 状态判断:
+ *   SM_OFF_STATUS 是状态高字节, SM_OFF_CONTROL 是控制低字节。
+ *   为了与 Beckhoff SSC 的 SM_STATUS_MBX_BUFFER_FULL(0x0800) 对齐,
+ *   邮箱 full 判断统一读取 16 位 control/status word:
+ *
+ *      word = control | (status << 8)
+ *
+ *   bit11(0x0800) 表示 mailbox/buffer full:
+ *     - SM0(M→S): 主站写入了新命令, 等待 PDI 读取
+ *     - SM1(S→M): PDI 写入了响应, 等待主站读取
  */
-#define SM_STATUS_MBX_FULL      (1U << 3) /* 邮箱满 / 缓冲区有数据         */
+#define SM_STATUS_MBX_FULL      0x0800U /* Control/Status word: status bit3 */
 
 /*
  * SM 控制寄存器 (SM_OFF_CONTROL) 位定义 (AX58100 数据手册):
@@ -259,7 +269,7 @@ typedef struct {
     uint16_t startAddr;         /* 物理起始地址 (2B, Little-Endian)     */
     uint16_t length;            /* 长度          (2B, Little-Endian)     */
     uint8_t  control;           /* 控制寄存器: 方向[0] + 模式[2:1]      */
-    uint8_t  status;            /* 状态寄存器 (只读)                    */
+    uint16_t status;            /* control/status word (status is high byte) */
     uint8_t  activate;          /* 激活 (1=启用该通道)                  */
     uint8_t  pdiCtrl;           /* PDI 控制                             */
 } ESC_SM_Config_t;

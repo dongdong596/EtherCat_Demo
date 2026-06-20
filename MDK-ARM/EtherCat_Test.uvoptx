@@ -153,167 +153,104 @@
         <Ww>
           <count>0</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_escType,0x10</ItemText>
+          <ItemText>g_escInfo,0x0A</ItemText>
         </Ww>
         <Ww>
           <count>1</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_escVer</ItemText>
+          <ItemText>g_dbg_alCtrlLo,0x10</ItemText>
         </Ww>
         <Ww>
           <count>2</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_escError</ItemText>
+          <ItemText>g_dbg_lastSvc</ItemText>
         </Ww>
         <Ww>
           <count>3</count>
           <WinNumber>1</WinNumber>
-          <ItemText>rxData[8],0x0A</ItemText>
+          <ItemText>g_dbg_lastCmd</ItemText>
         </Ww>
         <Ww>
           <count>4</count>
           <WinNumber>1</WinNumber>
-          <ItemText>rxData,0x0A</ItemText>
+          <ItemText>g_dbg_sdoInfoOp</ItemText>
         </Ww>
         <Ww>
           <count>5</count>
           <WinNumber>1</WinNumber>
-          <ItemText>data</ItemText>
+          <ItemText>g_dbg_sdoInfoListType</ItemText>
         </Ww>
         <Ww>
           <count>6</count>
           <WinNumber>1</WinNumber>
-          <ItemText>ECAT_GetState</ItemText>
+          <ItemText>g_dbg_lastTxLen</ItemText>
         </Ww>
         <Ww>
           <count>7</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_escInfo,0x0A</ItemText>
+          <ItemText>g_dbg_lastTxLen</ItemText>
         </Ww>
         <Ww>
           <count>8</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_coe_rxCnt,0x0A</ItemText>
+          <ItemText>g_dbg_sm1Status</ItemText>
         </Ww>
         <Ww>
           <count>9</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_objectDict[i],0x0A</ItemText>
+          <ItemText>\\EtherCat_Test\../App/Src/app_coe.c\g_dbg_coe_rxCnt</ItemText>
         </Ww>
         <Ww>
           <count>10</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_objectDict</ItemText>
+          <ItemText>\\EtherCat_Test\../App/Src/app_coe.c\g_dbg_coe_procCnt</ItemText>
         </Ww>
         <Ww>
           <count>11</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_coe_procCnt,0x0A</ItemText>
+          <ItemText>g_dbg_txTimeout</ItemText>
         </Ww>
         <Ww>
           <count>12</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_vendorID</ItemText>
+          <ItemText>g_dbg_reqIndex</ItemText>
         </Ww>
         <Ww>
           <count>13</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_productCode</ItemText>
+          <ItemText>g_dbg_reqSubIndex</ItemText>
         </Ww>
         <Ww>
           <count>14</count>
           <WinNumber>1</WinNumber>
-          <ItemText>&amp;g_vendorID</ItemText>
+          <ItemText>g_dbg_respCmd</ItemText>
         </Ww>
         <Ww>
           <count>15</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_coe_procCnt,0x0A</ItemText>
+          <ItemText>g_dbg_respIndex</ItemText>
         </Ww>
         <Ww>
           <count>16</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_coe_rxCnt,0x0A</ItemText>
+          <ItemText>g_dbg_respSubIndex</ItemText>
         </Ww>
         <Ww>
           <count>17</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_alCtrlLo,0x0A</ItemText>
+          <ItemText>\\EtherCat_Test\../App/Src/app_coe.c\g_dbg_lastTxLen</ItemText>
         </Ww>
         <Ww>
           <count>18</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_req1Cmd,0x10</ItemText>
+          <ItemText>g_dbg_txMbxLen</ItemText>
         </Ww>
         <Ww>
           <count>19</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_req2Cmd,0x10</ItemText>
-        </Ww>
-        <Ww>
-          <count>20</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_req2Index,0x10</ItemText>
-        </Ww>
-        <Ww>
-          <count>21</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_req1Index,0x0A</ItemText>
-        </Ww>
-        <Ww>
-          <count>22</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_req2Data,0x0A</ItemText>
-        </Ww>
-        <Ww>
-          <count>23</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_testCounter</ItemText>
-        </Ww>
-        <Ww>
-          <count>24</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_testStatus</ItemText>
-        </Ww>
-        <Ww>
-          <count>25</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_lastSvc</ItemText>
-        </Ww>
-        <Ww>
-          <count>26</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_lastCmd</ItemText>
-        </Ww>
-        <Ww>
-          <count>27</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_sdoInfoOp</ItemText>
-        </Ww>
-        <Ww>
-          <count>28</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_sdoInfoListType</ItemText>
-        </Ww>
-        <Ww>
-          <count>29</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_lastTxLen</ItemText>
-        </Ww>
-        <Ww>
-          <count>30</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_dbg_lastTxLen</ItemText>
+          <ItemText>g_dbg_sm0RawSts</ItemText>
         </Ww>
       </WatchWindow1>
-      <MemoryWindow1>
-        <Mm>
-          <WinNumber>1</WinNumber>
-          <SubType>0</SubType>
-          <ItemText>g_dbg_infoTxbuf</ItemText>
-          <AccSizeX>0</AccSizeX>
-        </Mm>
-      </MemoryWindow1>
       <Tracepoint>
         <THDelay>0</THDelay>
       </Tracepoint>

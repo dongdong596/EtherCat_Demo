@@ -8,16 +8,19 @@
   *  CoE 协议层次:
   *    邮箱头 (6B) + CoE 头 (2B) + 数据
   *
-  *  SDO 服务:
-  *    Upload   — 主站读从站对象字典
-  *    Download — 主站写从站对象字典
+ *  SDO 服务:
+ *    Upload   — 主站读从站对象字典
+ *    Download — 主站写从站对象字典
+ *    Info     — TwinCAT CoE Online 扫描对象列表/对象描述/条目描述
   *
   *  强制对象 (ETG.1000.6):
   *    0x1000  Device Type         — 设备类型
   *    0x1008  Device Name         — 设备名称
   *    0x1009  Hardware Version    — 硬件版本
   *    0x100A  Software Version    — 软件版本
-  *    0x1018  Identity Object     — 厂商ID/产品代码/序列号/版本
+ *    0x1018  Identity Object     — 厂商ID/产品代码/序列号/版本
+ *    0x1600/0x1A00               — RxPDO/TxPDO mapping
+ *    0x1C00/0x1C12/0x1C13        — SM 类型与 PDO assign
   ******************************************************************************
   */
 
@@ -184,10 +187,19 @@ typedef struct {
  * §5  调试变量 (Watch 窗口观察)
  * ================================================================ */
 
-extern volatile uint8_t g_dbg_coe_rxCnt;   /* CoE_MainTask 收到邮箱数据的次数   */
-extern volatile uint8_t g_dbg_coe_procCnt; /* 成功处理 SDO 请求的次数          */
-extern volatile uint8_t g_dbg_sm0RawSts;   /* SM0 状态寄存器原始值 (每周期更新) */
-extern volatile uint8_t g_dbg_coe_state;   /* 0=无事件 1=有事件但非CoE 2=非SDO 3=已处理 */
+extern volatile uint8_t  g_dbg_coe_rxCnt;     /* 收到 CoE 邮箱帧次数 */
+extern volatile uint8_t  g_dbg_coe_procCnt;   /* 已处理 SDO/SDO Info 请求次数 */
+extern volatile uint8_t  g_dbg_txTimeout;     /* 等待 SM1 空闲超时次数 */
+extern volatile uint8_t  g_dbg_lastSvc;       /* 最近一次 CoE service */
+extern volatile uint8_t  g_dbg_lastCmd;       /* 最近一次 SDO command */
+extern volatile uint8_t  g_dbg_sdoInfoOp;     /* 最近一次 SDO Info opcode */
+extern volatile uint16_t g_dbg_reqIndex;      /* 最近一次 SDO 请求 index */
+extern volatile uint8_t  g_dbg_reqSubIndex;   /* 最近一次 SDO 请求 subindex */
+extern volatile uint8_t  g_dbg_respCmd;       /* 最近一次 SDO 响应 command */
+extern volatile uint16_t g_dbg_respIndex;     /* 最近一次 SDO 响应 index */
+extern volatile uint8_t  g_dbg_respSubIndex;  /* 最近一次 SDO 响应 subindex */
+extern volatile uint16_t g_dbg_lastTxLen;     /* 最近一次发送总长度, 含 6B 邮箱头 */
+extern volatile uint16_t g_dbg_txMbxLen;      /* 最近一次 Mailbox Length 字段 */
 
 /* ================================================================
  * §6  CoE 主任务 API
