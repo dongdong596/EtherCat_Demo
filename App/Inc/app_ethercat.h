@@ -53,6 +53,23 @@ extern volatile uint16_t g_dbg_sm1Status;
 extern volatile uint8_t  g_dbg_sm1Active;
 extern volatile uint32_t g_dbg_pdoOut;
 extern volatile uint32_t g_dbg_pdoIn;
+extern volatile uint16_t g_dbg_sm2Addr;
+extern volatile uint16_t g_dbg_sm2Len;
+extern volatile uint8_t  g_dbg_sm2Ctrl;
+extern volatile uint8_t  g_dbg_sm2Active;
+extern volatile uint16_t g_dbg_sm3Addr;
+extern volatile uint16_t g_dbg_sm3Len;
+extern volatile uint8_t  g_dbg_sm3Ctrl;
+extern volatile uint8_t  g_dbg_sm3Active;
+extern volatile uint16_t g_dbg_fmmuOutPhys;
+extern volatile uint16_t g_dbg_fmmuOutLen;
+extern volatile uint8_t  g_dbg_fmmuOutType;
+extern volatile uint8_t  g_dbg_fmmuOutActive;
+extern volatile uint16_t g_dbg_fmmuInPhys;
+extern volatile uint16_t g_dbg_fmmuInLen;
+extern volatile uint8_t  g_dbg_fmmuInType;
+extern volatile uint8_t  g_dbg_fmmuInActive;
+extern volatile uint16_t g_dbg_cfgError;
 
 #ifdef __cplusplus
 }
