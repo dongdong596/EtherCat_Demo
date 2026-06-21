@@ -51,6 +51,8 @@ extern volatile uint16_t g_dbg_sm1Len;
 extern volatile uint8_t  g_dbg_sm1Ctrl;
 extern volatile uint16_t g_dbg_sm1Status;
 extern volatile uint8_t  g_dbg_sm1Active;
+extern volatile uint32_t g_dbg_pdoOut;
+extern volatile uint32_t g_dbg_pdoIn;
 
 #ifdef __cplusplus
 }

@@ -14,6 +14,7 @@
   */
 
 #include "app_ethercat.h"
+#include "app_coe.h"
 #include <string.h>
 
 /* ================================================================
@@ -40,6 +41,8 @@ volatile uint16_t g_dbg_sm1Len    = 0;
 volatile uint8_t  g_dbg_sm1Ctrl   = 0;
 volatile uint16_t g_dbg_sm1Status = 0;
 volatile uint8_t  g_dbg_sm1Active = 0;
+volatile uint32_t g_dbg_pdoOut    = 0;
+volatile uint32_t g_dbg_pdoIn     = 0;
 
 /* 过程数据缓冲区 (SM2 输出 主→从, SM3 输入 从→主) */
 static uint8_t m_pdOutput[32] = {0};  /* SM2: 主站发来的数据 */
@@ -78,12 +81,10 @@ static void OnEnterState(uint8_t newState)
         break;
     case ESC_STATE_OP:
         /* 初始化过程数据: 输入区填递增计数, 便于主站侧观察 */
-        {
-            static uint8_t s_toggle = 0;
-            s_toggle = ~s_toggle;
-            memset(m_pdInput,  s_toggle, sizeof(m_pdInput));
-            memset(m_pdOutput, 0,        sizeof(m_pdOutput));
-        }
+        memset(m_pdInput,  0, sizeof(m_pdInput));
+        memset(m_pdOutput, 0, sizeof(m_pdOutput));
+        g_dbg_pdoOut = 0;
+        g_dbg_pdoIn  = 0;
         break;
     }
 }
@@ -291,6 +292,20 @@ void ECAT_ProcessDataExchange(void)
     if (m_currentState != ESC_STATE_OP) return;
 
     ESC_ReadOutputData(m_pdOutput, sizeof(m_pdOutput));
-    m_pdInput[0]++;
+
+    g_dbg_pdoOut = ((uint32_t)m_pdOutput[0])
+                 | ((uint32_t)m_pdOutput[1] << 8)
+                 | ((uint32_t)m_pdOutput[2] << 16)
+                 | ((uint32_t)m_pdOutput[3] << 24);
+    g_testCounter = g_dbg_pdoOut;
+
+    g_testStatus = g_testCounter + 1U;
+    g_dbg_pdoIn = g_testStatus;
+
+    m_pdInput[0] = (uint8_t)(g_testStatus);
+    m_pdInput[1] = (uint8_t)(g_testStatus >> 8);
+    m_pdInput[2] = (uint8_t)(g_testStatus >> 16);
+    m_pdInput[3] = (uint8_t)(g_testStatus >> 24);
+
     ESC_WriteInputData(m_pdInput, sizeof(m_pdInput));
 }

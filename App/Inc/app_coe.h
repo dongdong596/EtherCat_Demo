@@ -200,6 +200,8 @@ extern volatile uint16_t g_dbg_respIndex;     /* 最近一次 SDO 响应 index *
 extern volatile uint8_t  g_dbg_respSubIndex;  /* 最近一次 SDO 响应 subindex */
 extern volatile uint16_t g_dbg_lastTxLen;     /* 最近一次发送总长度, 含 6B 邮箱头 */
 extern volatile uint16_t g_dbg_txMbxLen;      /* 最近一次 Mailbox Length 字段 */
+extern volatile uint32_t g_testCounter;       /* 0x2000: Test Counter */
+extern volatile uint32_t g_testStatus;        /* 0x2001: Test Status */
 
 /* ================================================================
  * §6  CoE 主任务 API

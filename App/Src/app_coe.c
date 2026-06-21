@@ -66,7 +66,7 @@ static uint32_t g_serialNumber     = 0x00000001UL;  /* 子索引 4: 序列号   
 
 /* ── 测试对象 (应用层可读写) ── */
 volatile uint32_t g_testCounter = 0;             /* 0x2000: 测试计数器 (rw)  */
-static uint32_t g_testStatus       = 0x12345678UL;  /* 0x2001: 测试状态 (ro)    */
+volatile uint32_t g_testStatus  = 0x12345678UL;  /* 0x2001: 测试状态 (ro)    */
 
 /* ── SM 通信类型 (0x1C00, 4 个子对象) ── */
 static uint8_t  g_smType_maxSub    = 4;
@@ -150,7 +150,7 @@ static OD_Entry_t g_objectDict[] = {
     { 0x2000, 0, OD_TYPE_UINT32, OD_ACCESS_RW, 0, 4, (void *)&g_testCounter },
 
     /* 0x2001: 测试状态 (只读) */
-    { 0x2001, 0, OD_TYPE_UINT32, OD_ACCESS_RO, 0, 4, &g_testStatus },
+    { 0x2001, 0, OD_TYPE_UINT32, OD_ACCESS_RO, 0, 4, (void *)&g_testStatus },
 };
 
 #define OD_SIZE  (sizeof(g_objectDict) / sizeof(g_objectDict[0]))
