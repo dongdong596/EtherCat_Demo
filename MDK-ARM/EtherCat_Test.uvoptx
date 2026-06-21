@@ -270,6 +270,11 @@
           <WinNumber>1</WinNumber>
           <ItemText>g_testStatus</ItemText>
         </Ww>
+        <Ww>
+          <count>24</count>
+          <WinNumber>1</WinNumber>
+          <ItemText>g_dbg_swInputMask</ItemText>
+        </Ww>
       </WatchWindow1>
       <Tracepoint>
         <THDelay>0</THDelay>

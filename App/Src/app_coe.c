@@ -64,9 +64,9 @@ static uint32_t g_productCode      = 0x58100000UL;  /* 子索引 2: 产品代码
 static uint32_t g_revisionNumber   = 0x00020111UL;  /* 子索引 3: 版本号 (与XML/EEPROM一致) */
 static uint32_t g_serialNumber     = 0x00000001UL;  /* 子索引 4: 序列号         */
 
-/* ── 测试对象 (应用层可读写) ── */
-volatile uint32_t g_testCounter = 0;             /* 0x2000: 测试计数器 (rw)  */
-volatile uint32_t g_testStatus  = 0x12345678UL;  /* 0x2001: 测试状态 (ro)    */
+/* ── 应用 IO 对象 (保留旧变量名，方便 Watch 继续使用) ── */
+volatile uint32_t g_testCounter = 0;             /* 0x2000: LED Output Mask (rw)     */
+volatile uint32_t g_testStatus  = 0;             /* 0x2001: Digital Input Mask (ro)  */
 
 /* ── SM 通信类型 (0x1C00, 4 个子对象) ── */
 static uint8_t  g_smType_maxSub    = 4;
@@ -146,10 +146,10 @@ static OD_Entry_t g_objectDict[] = {
     { 0x1C13, 0, OD_TYPE_UINT8,  OD_ACCESS_RO, 0, 1, &g_txPdoAssign },
     { 0x1C13, 1, OD_TYPE_UINT16, OD_ACCESS_RO, 0, 2, &g_txPdoIdx },
 
-    /* 0x2000: 测试计数器 (读写) */
+    /* 0x2000: LED Output Mask (读写) */
     { 0x2000, 0, OD_TYPE_UINT32, OD_ACCESS_RW, 0, 4, (void *)&g_testCounter },
 
-    /* 0x2001: 测试状态 (只读) */
+    /* 0x2001: Digital Input Mask (只读) */
     { 0x2001, 0, OD_TYPE_UINT32, OD_ACCESS_RO, 0, 4, (void *)&g_testStatus },
 };
 
