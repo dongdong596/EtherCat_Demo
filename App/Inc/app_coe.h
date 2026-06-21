@@ -29,6 +29,10 @@
 
 #include "AX58100.h"
 
+#ifndef COE_DIAG_ENABLE
+#define COE_DIAG_ENABLE 0
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -187,6 +191,7 @@ typedef struct {
  * §5  调试变量 (Watch 窗口观察)
  * ================================================================ */
 
+#if COE_DIAG_ENABLE
 extern volatile uint8_t  g_dbg_coe_rxCnt;     /* 收到 CoE 邮箱帧次数 */
 extern volatile uint8_t  g_dbg_coe_procCnt;   /* 已处理 SDO/SDO Info 请求次数 */
 extern volatile uint8_t  g_dbg_txTimeout;     /* 等待 SM1 空闲超时次数 */
@@ -200,6 +205,8 @@ extern volatile uint16_t g_dbg_respIndex;     /* 最近一次 SDO 响应 index *
 extern volatile uint8_t  g_dbg_respSubIndex;  /* 最近一次 SDO 响应 subindex */
 extern volatile uint16_t g_dbg_lastTxLen;     /* 最近一次发送总长度, 含 6B 邮箱头 */
 extern volatile uint16_t g_dbg_txMbxLen;      /* 最近一次 Mailbox Length 字段 */
+#endif
+
 extern volatile uint32_t g_testCounter;       /* 0x2000: LED Output Mask */
 extern volatile uint32_t g_testStatus;        /* 0x2001: Digital Input Mask */
 

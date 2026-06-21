@@ -92,11 +92,6 @@ int main(void)
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
 
-  /* 上电后读取 ESC 完整信息, 结果存入 g_escInfo 结构体
-   * 设断点在下一行, Watch 窗口展开 g_escInfo 查看所有字段 */
-  AX58100_ReadESCInfo();
-  // AX58100_WriteIdentity();      /* TODO: EEPROM写暂不启用, 可能干扰ESC */
-
   /* 初始化 EtherCAT 状态机, 写 AL Status = Init */
   ECAT_Init();
 
@@ -106,33 +101,16 @@ int main(void)
   /* 禁用 ESC 看门狗, 防止开发阶段异常复位 */
   ESC_Watchdog_Config();
 
-  __NOP();    /* 断点: 观察 g_escInfo + ECAT_GetState() */
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  static uint32_t loopCount = 0;
 
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
-    /* ============================================================
-     * AX58100 ESC 测试菜单
-     *
-     * [CORE] ECAT_MainTask():       (第4步) 状态机循环 — 正常运行时默认
-     *
-     * [T]  ECAT_SelfTest():         (第4步自测) 不需网线, 返回 0 = 通过
-     *                              手动模拟 Init→PreOp→SafeOp→Op→Init 全流程
-     * [1] AX58100_ReadESCInfo():   (第3步) 块读 ESC 完整信息 → g_escInfo
-     * [2] ESC_TestReadID():        验证通信, 读 Type/Version
-     * [3] ESC_TestReadWrite():     读写用户 RAM, 验证 PDI 功能
-     * [4] ESC_Diagnose():          全诊断: 身份+PDI+SM0+RAM
-     * [5] SPI_LoopbackTest():      自环回 - 需短接 MISO/MOSI
-     * [6] SPI_SendTestPattern():   波形测试 - 示波器观察
-     * ============================================================ */
 
     /* ---- 状态机: 两次处理 ACK 握手 ---- */
     ECAT_MainTask();
@@ -145,23 +123,6 @@ int main(void)
 
     /* ---- 过程数据交换 (OP 态下激活) ---- */
     ECAT_ProcessDataExchange();
-
-    /* ---- 测试: 每秒递增 testCounter，供主站读取验证 ---- */
-    loopCount++;
-    if (loopCount >= 200) {  // 5ms * 200 = 1秒
-        extern volatile uint32_t g_testCounter;
-        g_testCounter++;
-        loopCount = 0;
-    }
-
-    /* ---- 测试模式: 取消注释下面其中一行 ---- */
-    // ECAT_SelfTest();              /* [T] 第4步自测: 返回 0 即通过 */
-    // AX58100_ReadESCInfo();      /* [1] 第3步: ESC 完整信息    */
-    // ESC_TestReadID();           /* [2] 读 ESC 类型/版本       */
-    // ESC_TestReadWrite();        /* [3] 读写用户 RAM           */
-    // ESC_Diagnose();             /* [4] 全诊断                 */
-    // SPI_LoopbackTest();         /* [5] 自环回                 */
-    // SPI_SendTestPattern();      /* [6] 发送波形               */
 
     HAL_Delay(5);                 /* 5ms 周期: 给 TwinCAT 足够时间配 SM */
   }

@@ -28,10 +28,10 @@
 /* ================================================================
  * 全局变量 — 调试用, Watch 窗口直接观察
  * ================================================================ */
-volatile uint8_t g_escType   = 0;    /* 最近一次读的 ESC 类型            */
-volatile uint8_t g_escVer    = 0;    /* 最近一次读的 ESC 版本            */
-volatile uint8_t g_escError  = 0;    /* 读写测试错误计数 (0 = 通过)      */
-AX58100_Info_t    g_escInfo  = {0};  /* ESC 完整信息                     */
+static volatile uint8_t g_escType   = 0;    /* 最近一次读的 ESC 类型            */
+static volatile uint8_t g_escVer    = 0;    /* 最近一次读的 ESC 版本            */
+static volatile uint8_t g_escError  = 0;    /* 读写测试错误计数 (0 = 通过)      */
+static AX58100_Info_t    g_escInfo  = {0};  /* ESC 完整信息                     */
 
 /* IRQ 状态缓存 (每次 SPI 事务自动更新) */
 static uint8_t g_esc_irq0 = 0;       /* AL Event Request [7:0]  (0x0220) */

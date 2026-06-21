@@ -3,8 +3,6 @@
 
 #define SWINPUT_ACTIVE_LOW  0U
 
-volatile uint16_t g_dbg_swInputMask = 0;
-
 uint16_t BSP_SWInput_ReadMask(void)
 {
     uint16_t mask;
@@ -19,6 +17,5 @@ uint16_t BSP_SWInput_ReadMask(void)
     mask = (uint16_t)(~mask);
 #endif
 
-    g_dbg_swInputMask = mask;
     return mask;
 }

@@ -24,6 +24,7 @@
 #include <string.h>
 
 /* Watch 调试变量: 保留 CoE 在线诊断最常用的一组 */
+#if COE_DIAG_ENABLE
 volatile uint8_t  g_dbg_coe_rxCnt     = 0;  /* 收到 CoE 邮箱帧次数 */
 volatile uint8_t  g_dbg_coe_procCnt   = 0;  /* 已处理 SDO/SDO Info 请求次数 */
 volatile uint8_t  g_dbg_txTimeout     = 0;  /* 等待 SM1 发送邮箱空闲超时次数 */
@@ -37,6 +38,23 @@ volatile uint16_t g_dbg_respIndex     = 0;  /* 最近一次 SDO 响应 index */
 volatile uint8_t  g_dbg_respSubIndex  = 0;  /* 最近一次 SDO 响应 subindex */
 volatile uint16_t g_dbg_lastTxLen     = 0;  /* 最近一次发送总长度, 含 6B 邮箱头 */
 volatile uint16_t g_dbg_txMbxLen      = 0;  /* 最近一次 Mailbox Length 字段 */
+#else
+static volatile uint8_t  s_coeDbg8;
+static volatile uint16_t s_coeDbg16;
+#define g_dbg_coe_rxCnt     s_coeDbg8
+#define g_dbg_coe_procCnt   s_coeDbg8
+#define g_dbg_txTimeout     s_coeDbg8
+#define g_dbg_lastSvc       s_coeDbg8
+#define g_dbg_lastCmd       s_coeDbg8
+#define g_dbg_sdoInfoOp     s_coeDbg8
+#define g_dbg_reqIndex      s_coeDbg16
+#define g_dbg_reqSubIndex   s_coeDbg8
+#define g_dbg_respCmd       s_coeDbg8
+#define g_dbg_respIndex     s_coeDbg16
+#define g_dbg_respSubIndex  s_coeDbg8
+#define g_dbg_lastTxLen     s_coeDbg16
+#define g_dbg_txMbxLen      s_coeDbg16
+#endif
 static uint8_t g_tx_mbx_counter = 0;         /* 从站发送邮箱计数器 */
 static uint16_t g_rx_mbx_address = 0;
 static uint8_t g_rx_mbx_channel = 0;

@@ -41,6 +41,7 @@ static uint16_t m_alError    = 0;                /* AL Status Code */
 static uint8_t m_skipConfigValidation = 0;
 
 /* Watch 调试变量: 状态机和邮箱 SM 配置 */
+#if ECAT_DIAG_ENABLE
 volatile uint8_t g_dbg_alCtrlLo = 0;  /* 最近一次读到的 AL Control [7:0]        */
 volatile uint8_t g_dbg_alCtrlHi = 0;  /* 最近一次读到的 AL Control [15:8]       */
 volatile uint8_t g_dbg_alStatus = 0;  /* 最近一次写入 AL Status [7:0]           */
@@ -76,6 +77,44 @@ volatile uint16_t g_dbg_fmmuInLen  = 0;
 volatile uint8_t  g_dbg_fmmuInType = 0;
 volatile uint8_t  g_dbg_fmmuInActive = 0;
 volatile uint16_t g_dbg_cfgError = 0;
+#else
+static volatile uint8_t  s_dbg8;
+static volatile uint16_t s_dbg16;
+static volatile uint32_t s_dbg32;
+#define g_dbg_alCtrlLo      s_dbg8
+#define g_dbg_alCtrlHi      s_dbg8
+#define g_dbg_alStatus      s_dbg8
+#define g_dbg_callCnt       s_dbg8
+#define g_dbg_sm0Addr       s_dbg16
+#define g_dbg_sm0Len        s_dbg16
+#define g_dbg_sm0Ctrl       s_dbg8
+#define g_dbg_sm0Status     s_dbg16
+#define g_dbg_sm0Active     s_dbg8
+#define g_dbg_sm1Addr       s_dbg16
+#define g_dbg_sm1Len        s_dbg16
+#define g_dbg_sm1Ctrl       s_dbg8
+#define g_dbg_sm1Status     s_dbg16
+#define g_dbg_sm1Active     s_dbg8
+#define g_dbg_pdoOut        s_dbg32
+#define g_dbg_pdoIn         s_dbg32
+#define g_dbg_sm2Addr       s_dbg16
+#define g_dbg_sm2Len        s_dbg16
+#define g_dbg_sm2Ctrl       s_dbg8
+#define g_dbg_sm2Active     s_dbg8
+#define g_dbg_sm3Addr       s_dbg16
+#define g_dbg_sm3Len        s_dbg16
+#define g_dbg_sm3Ctrl       s_dbg8
+#define g_dbg_sm3Active     s_dbg8
+#define g_dbg_fmmuOutPhys   s_dbg16
+#define g_dbg_fmmuOutLen    s_dbg16
+#define g_dbg_fmmuOutType   s_dbg8
+#define g_dbg_fmmuOutActive s_dbg8
+#define g_dbg_fmmuInPhys    s_dbg16
+#define g_dbg_fmmuInLen     s_dbg16
+#define g_dbg_fmmuInType    s_dbg8
+#define g_dbg_fmmuInActive  s_dbg8
+#define g_dbg_cfgError      s_dbg16
+#endif
 
 /* 过程数据缓冲区 (SM2 输出 主→从, SM3 输入 从→主) */
 static uint8_t m_pdOutput[32] = {0};  /* SM2: 主站发来的数据 */
