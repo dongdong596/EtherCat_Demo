@@ -20,12 +20,12 @@
 #include "main.h"
 #include "spi.h"
 #include "gpio.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
 #include "AX58100.h"
 #include "app_ethercat.h"
 #include "app_coe.h"
-/* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
-
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/

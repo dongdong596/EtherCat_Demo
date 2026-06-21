@@ -504,6 +504,16 @@
               <FileType>1</FileType>
               <FilePath>..\Bsp\Src\AX58100.c</FilePath>
             </File>
+            <File>
+              <FileName>Led.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\Src\Led.c</FilePath>
+            </File>
+            <File>
+              <FileName>swInput.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Bsp\Src\swInput.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

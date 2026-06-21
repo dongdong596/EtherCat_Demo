@@ -15,6 +15,8 @@
 
 #include "app_ethercat.h"
 #include "app_coe.h"
+#include "Led.h"
+#include "swInput.h"
 #include <string.h>
 
 #define ECAT_PDO_BYTES                  4U
@@ -307,11 +309,12 @@ static void OnEnterState(uint8_t newState)
         /* TODO 第5/6步: 验证 SM/FMMU 配置 */
         break;
     case ESC_STATE_OP:
-        /* 初始化过程数据: 输入区填递增计数, 便于主站侧观察 */
+        /* 初始化过程数据缓存，OP 后由实际 IO 周期刷新 */
         memset(m_pdInput,  0, sizeof(m_pdInput));
         memset(m_pdOutput, 0, sizeof(m_pdOutput));
         g_dbg_pdoOut = 0;
         g_dbg_pdoIn  = 0;
+        BSP_LED_WriteMask(0U);
         break;
     }
 }
@@ -322,6 +325,7 @@ static void OnLeaveState(uint8_t oldState)
     {
     case ESC_STATE_OP:
         /* TODO 第7步: 冻结过程数据 */
+        BSP_LED_WriteMask(0U);
         break;
     case ESC_STATE_SAFEOP:
         break;
@@ -560,8 +564,9 @@ void ECAT_ProcessDataExchange(void)
                  | ((uint32_t)m_pdOutput[2] << 16)
                  | ((uint32_t)m_pdOutput[3] << 24);
     g_testCounter = g_dbg_pdoOut;
+    BSP_LED_WriteMask((uint16_t)(g_testCounter & 0xFFFFU));
 
-    g_testStatus = g_testCounter + 1U;
+    g_testStatus = BSP_SWInput_ReadMask();
     g_dbg_pdoIn = g_testStatus;
 
     m_pdInput[0] = (uint8_t)(g_testStatus);
