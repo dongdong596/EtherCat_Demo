@@ -36,7 +36,6 @@ extern "C" {
 void    ECAT_Init(void);                /* 初始化状态机, 写 AL Status = Init      */
 uint8_t ECAT_MainTask(void);            /* 状态机主循环: 读 AL Control → 跳转    */
 uint8_t ECAT_GetState(void);            /* 返回当前 EtherCAT 状态                */
-uint8_t ECAT_SelfTest(void);            /* 自测: 手动模拟全状态来回, 返回 0=通过 */
 void    ECAT_ProcessDataExchange(void);  /* 过程数据交换: OP 态每周期调用        */
 void    ECAT_DiagReadSM(void);           /* 诊断: 回读 SM0/SM1 实际配置          */
 

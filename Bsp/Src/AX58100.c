@@ -28,14 +28,8 @@
 /* ================================================================
  * 全局变量 — 调试用, Watch 窗口直接观察
  * ================================================================ */
-static volatile uint8_t g_escType   = 0;    /* 最近一次读的 ESC 类型            */
-static volatile uint8_t g_escVer    = 0;    /* 最近一次读的 ESC 版本            */
-static volatile uint8_t g_escError  = 0;    /* 读写测试错误计数 (0 = 通过)      */
-static AX58100_Info_t    g_escInfo  = {0};  /* ESC 完整信息                     */
 
 /* IRQ 状态缓存 (每次 SPI 事务自动更新) */
-static uint8_t g_esc_irq0 = 0;       /* AL Event Request [7:0]  (0x0220) */
-static uint8_t g_esc_irq1 = 0;       /* AL Event Request [15:8] (0x0221) */
 
 /* ================================================================
  * §A  PDI 地址编码
@@ -87,8 +81,6 @@ HAL_StatusTypeDef ESC_ReadRegister(uint16_t addr, uint8_t *pData)
 
     if (status == HAL_OK)
     {
-        g_esc_irq0 = rxBuf[0];   /* 保存 IRQ 状态 */
-        g_esc_irq1 = rxBuf[1];
         *pData = rxBuf[3];       /* 数据在第 4 个字节 */
     }
     return status;
@@ -113,12 +105,6 @@ HAL_StatusTypeDef ESC_WriteRegister(uint16_t addr, uint8_t data)
     SPI_CS_LOW();
     status = HAL_SPI_TransmitReceive(&hspi1, txBuf, rxBuf, 3, PDI_TIMEOUT_MS);
     SPI_CS_HIGH();
-
-    if (status == HAL_OK)
-    {
-        g_esc_irq0 = rxBuf[0];
-        g_esc_irq1 = rxBuf[1];
-    }
     return status;
 }
 
@@ -169,8 +155,6 @@ HAL_StatusTypeDef ESC_ReadBlock(uint16_t addr, uint8_t *pData, uint16_t size)
 
     if (status == HAL_OK)
     {
-        g_esc_irq0 = rxBuf[0];
-        g_esc_irq1 = rxBuf[1];
         for (i = 0; i < size; i++)
         {
             pData[i] = rxBuf[2 + i]; /* 数据从第 3 字节开始 (跳过地址段) */
@@ -203,12 +187,6 @@ HAL_StatusTypeDef ESC_WriteBlock(uint16_t addr, uint8_t *pData, uint16_t size)
     SPI_CS_LOW();
     status = HAL_SPI_TransmitReceive(&hspi1, txBuf, rxBuf, 2 + size, PDI_TIMEOUT_MS);
     SPI_CS_HIGH();
-
-    if (status == HAL_OK)
-    {
-        g_esc_irq0 = rxBuf[0];
-        g_esc_irq1 = rxBuf[1];
-    }
     return status;
 }
 
@@ -217,12 +195,6 @@ HAL_StatusTypeDef ESC_WriteBlock(uint16_t addr, uint8_t *pData, uint16_t size)
  * @note   ESC 在每次 SPI 地址段自动返回 AL Event Request 寄存器值
  *         (0x0220~0x0221), 本函数读取缓存而不发起新 SPI 事务
  */
-void ESC_GetIRQStatus(uint8_t *irq0, uint8_t *irq1)
-{
-    *irq0 = g_esc_irq0;
-    *irq1 = g_esc_irq1;
-}
-
 /* ================================================================
  * §C  SyncManager 管理
  *     ESC 有 8 个 SM 通道 (0~7), 每通道 8 字节配置空间.
@@ -247,43 +219,6 @@ void ESC_GetIRQStatus(uint8_t *irq0, uint8_t *irq1)
  *          SM2: 过程输出  0x1100   32B  M2S_BUFFERED
  *          SM3: 过程输入  0x1120   32B  S2M_BUFFERED
  */
-void ESC_SM_Init(void)
-{
-    ESC_SM_Config_t cfg;
-
-    /* SM0: 邮箱输出 (主→从) */
-    cfg.startAddr = SM0_DEFAULT_ADDR;
-    cfg.length    = SM0_DEFAULT_LEN;
-    cfg.control   = SM0_DEFAULT_CTRL;
-    cfg.activate  = 1;
-    cfg.pdiCtrl   = 0;
-    ESC_SM_Config(0, &cfg);
-
-    /* SM1: 邮箱输入 (从→主) */
-    cfg.startAddr = SM1_DEFAULT_ADDR;
-    cfg.length    = SM1_DEFAULT_LEN;
-    cfg.control   = SM1_DEFAULT_CTRL;
-    cfg.activate  = 1;
-    cfg.pdiCtrl   = 0;
-    ESC_SM_Config(1, &cfg);
-
-    /* SM2: 过程数据输出 (主→从, 缓冲模式) */
-    cfg.startAddr = SM2_DEFAULT_ADDR;
-    cfg.length    = SM2_DEFAULT_LEN;
-    cfg.control   = SM2_DEFAULT_CTRL;
-    cfg.activate  = 1;
-    cfg.pdiCtrl   = 0;
-    ESC_SM_Config(2, &cfg);
-
-    /* SM3: 过程数据输入 (从→主, 缓冲模式) */
-    cfg.startAddr = SM3_DEFAULT_ADDR;
-    cfg.length    = SM3_DEFAULT_LEN;
-    cfg.control   = SM3_DEFAULT_CTRL;
-    cfg.activate  = 1;
-    cfg.pdiCtrl   = 0;
-    ESC_SM_Config(3, &cfg);
-}
-
 /**
  * @brief  读单个 SM 通道的完整配置到结构体
  * @param  smIdx: SM 索引 (0~7)
@@ -308,338 +243,10 @@ void ESC_SM_ReadConfig(uint8_t smIdx, ESC_SM_Config_t *pCfg)
     pCfg->pdiCtrl   = buf[SM_OFF_PDI_CTRL];
 }
 
-/**
- * @brief  写单个 SM 通道的完整配置到 ESC
- * @param  smIdx: SM 索引 (0~7)
- * @param  pCfg:  要写入的配置
- * @note   逐寄存器写入 (6 次单寄存器 SPI 事务)
- *         不写 status 字段 (只读寄存器)
- */
-void ESC_SM_Config(uint8_t smIdx, const ESC_SM_Config_t *pCfg)
-{
-    uint16_t smBase = ESC_REG_SM_BASE + (uint16_t)smIdx * ESC_REG_SM_STRIDE;
-
-    ESC_WriteRegister(smBase + SM_OFF_PHYS_START,     (uint8_t)(pCfg->startAddr & 0xFF));
-    ESC_WriteRegister(smBase + SM_OFF_PHYS_START + 1, (uint8_t)(pCfg->startAddr >> 8));
-    ESC_WriteRegister(smBase + SM_OFF_LENGTH,         (uint8_t)(pCfg->length & 0xFF));
-    ESC_WriteRegister(smBase + SM_OFF_LENGTH + 1,     (uint8_t)(pCfg->length >> 8));
-    ESC_WriteRegister(smBase + SM_OFF_CONTROL,        pCfg->control);
-    ESC_WriteRegister(smBase + SM_OFF_ACTIVATE,       pCfg->activate);
-    ESC_WriteRegister(smBase + SM_OFF_PDI_CTRL,       pCfg->pdiCtrl);
-}
-
-/* ── 向后兼容接口 (内部转为新 API) ── */
-
-/**
- * @brief  [兼容] 读 SM 通道配置 (旧接口, 逐参数)
- * @note   推荐使用 ESC_SM_ReadConfig() 新接口
- */
-void ESC_ReadSMConfig(uint8_t smIdx, uint16_t *pStartAddr, uint16_t *pLength,
-                      uint8_t *pControl, uint8_t *pStatus)
-{
-    ESC_SM_Config_t cfg;
-    ESC_SM_ReadConfig(smIdx, &cfg);
-    *pStartAddr = cfg.startAddr;
-    *pLength    = cfg.length;
-    *pControl   = cfg.control;
-    if (pStatus) *pStatus = (uint8_t)(cfg.status >> 8);
-}
-
-/**
- * @brief  [兼容] 写 SM 通道配置 (旧接口, 逐参数)
- * @note   推荐使用 ESC_SM_Config() 新接口
- */
-void ESC_WriteSMConfig(uint8_t smIdx, uint16_t startAddr, uint16_t length,
-                       uint8_t control, uint8_t activate)
-{
-    ESC_SM_Config_t cfg;
-    cfg.startAddr = startAddr;
-    cfg.length    = length;
-    cfg.control   = control;
-    cfg.activate  = activate;
-    cfg.pdiCtrl   = 0;
-    ESC_SM_Config(smIdx, &cfg);
-}
-
 /* ================================================================
- * §D  ESC 完整信息读取
+ * Watchdog / process data
  * ================================================================ */
 
-/**
- * @brief  读 ESC 完整设备信息
- * @note   一次调用读齐身份/能力/PDI 状态, 结果存入 g_escInfo
- *         只用 5 次 SPI 事务 (2 次块读 + 3 次单读), 通信开销极小
- */
-HAL_StatusTypeDef AX58100_ReadESCInfo(void)
-{
-    HAL_StatusTypeDef status;
-    uint8_t buf[16];
-
-    /* ── 第1次: 块读身份信息 (0x0000~0x0009, 10 字节) ── */
-    status = ESC_ReadBlock(ESC_REG_TYPE, buf, 10);
-    if (status != HAL_OK) return status;
-
-    g_escInfo.type    = buf[0];
-    g_escInfo.revision = buf[1];
-    /* buf[2], buf[3] reserved */
-    g_escInfo.fmmuSupported = buf[4];
-    g_escInfo.smSupported   = buf[5];
-    g_escInfo.ramSizeKB     = buf[6];
-    g_escInfo.portDesc      = buf[7];
-    g_escInfo.features      = (uint16_t)buf[8] | ((uint16_t)buf[9] << 8);
-
-    /* ── 第2次: 块读 MAC 地址 (0x0010~0x0015, 6 字节) ── */
-    status = ESC_ReadBlock(ESC_REG_STATION_MAC, g_escInfo.mac, 6);
-    if (status != HAL_OK) return status;
-
-    /* ── PDI 配置 (单寄存器) ── */
-    ESC_ReadRegister(ESC_REG_PDI_CONTROL, &g_escInfo.pdiControl);
-
-    /* ── PDI 错误状态 (单寄存器) ── */
-    ESC_ReadRegister(ESC_REG_PDI_ERR_CNT,  &g_escInfo.pdiErrorCnt);
-    ESC_ReadRegister(ESC_REG_PDI_ERR_CODE, &g_escInfo.pdiErrorCode);
-
-    /* 同步全局变量 (兼容旧接口 ESC_TestReadID) */
-    g_escType = g_escInfo.type;
-    g_escVer  = g_escInfo.revision;
-
-    return HAL_OK;
-}
-
-/* ================================================================
- * 往 ESC 写入固定身份 (解决无 EEPROM 时 ID 随机的问题)
- * SII 布局: word 8-9=VendorID, 10-11=ProductCode,
- *           12-13=Revision, 14-15=SerialNumber
- * ================================================================ */
-void AX58100_WriteIdentity(void)
-{
-    uint16_t wordAddr;
-    uint8_t  buf[4];
-
-    /* --- Vendor ID (SII word 8-9) --- */
-    wordAddr = 8;
-    buf[0] = (uint8_t)(0x00000596UL & 0xFF);        /* 小端序 */
-    buf[1] = (uint8_t)((0x00000596UL >> 8) & 0xFF);
-    buf[2] = (uint8_t)((0x00000596UL >> 16) & 0xFF);
-    buf[3] = (uint8_t)((0x00000596UL >> 24) & 0xFF);
-    ESC_WriteRegister(ESC_REG_EEPROM_ADDR,     (uint8_t)(wordAddr & 0xFF));
-    ESC_WriteRegister(ESC_REG_EEPROM_ADDR + 1, (uint8_t)(wordAddr >> 8));
-    ESC_WriteBlock(ESC_REG_EEPROM_DATA, buf, 4);
-    ESC_WriteRegister(ESC_REG_EEPROM_CTRL, 0x04);  /* Write command */
-
-    HAL_Delay(10);  /* 等 ESC 完成写入 */
-
-    /* --- Product Code (SII word 10-11) --- */
-    wordAddr = 10;
-    buf[0] = (uint8_t)(0x58100000UL & 0xFF);
-    buf[1] = (uint8_t)((0x58100000UL >> 8) & 0xFF);
-    buf[2] = (uint8_t)((0x58100000UL >> 16) & 0xFF);
-    buf[3] = (uint8_t)((0x58100000UL >> 24) & 0xFF);
-    ESC_WriteRegister(ESC_REG_EEPROM_ADDR,     (uint8_t)(wordAddr & 0xFF));
-    ESC_WriteRegister(ESC_REG_EEPROM_ADDR + 1, (uint8_t)(wordAddr >> 8));
-    ESC_WriteBlock(ESC_REG_EEPROM_DATA, buf, 4);
-    ESC_WriteRegister(ESC_REG_EEPROM_CTRL, 0x04);
-
-    HAL_Delay(10);
-
-    /* --- Revision (SII word 12-13) --- */
-    wordAddr = 12;
-    buf[0] = (uint8_t)(0x00020111UL & 0xFF);
-    buf[1] = (uint8_t)((0x00020111UL >> 8) & 0xFF);
-    buf[2] = (uint8_t)((0x00020111UL >> 16) & 0xFF);
-    buf[3] = (uint8_t)((0x00020111UL >> 24) & 0xFF);
-    ESC_WriteRegister(ESC_REG_EEPROM_ADDR,     (uint8_t)(wordAddr & 0xFF));
-    ESC_WriteRegister(ESC_REG_EEPROM_ADDR + 1, (uint8_t)(wordAddr >> 8));
-    ESC_WriteBlock(ESC_REG_EEPROM_DATA, buf, 4);
-    ESC_WriteRegister(ESC_REG_EEPROM_CTRL, 0x04);
-
-    HAL_Delay(10);
-
-    /* --- Serial Number (SII word 14-15) --- */
-    wordAddr = 14;
-    buf[0] = (uint8_t)(0x00000001UL & 0xFF);
-    buf[1] = (uint8_t)((0x00000001UL >> 8) & 0xFF);
-    buf[2] = (uint8_t)((0x00000001UL >> 16) & 0xFF);
-    buf[3] = (uint8_t)((0x00000001UL >> 24) & 0xFF);
-    ESC_WriteRegister(ESC_REG_EEPROM_ADDR,     (uint8_t)(wordAddr & 0xFF));
-    ESC_WriteRegister(ESC_REG_EEPROM_ADDR + 1, (uint8_t)(wordAddr >> 8));
-    ESC_WriteBlock(ESC_REG_EEPROM_DATA, buf, 4);
-    ESC_WriteRegister(ESC_REG_EEPROM_CTRL, 0x04);
-
-    __NOP();  /* 断点: 验证写入 */
-}
-
-/* ================================================================
- * §E  测试 / 诊断
- * ================================================================ */
-
-/**
- * @brief  测试: 读 ESC 类型和版本寄存器
- * @note   单次执行后设断点观察 g_escType / g_escVer
- */
-void ESC_TestReadID(void)
-{
-    uint8_t irq0, irq1;
-
-    /* 读 ESC Type (0x0000) */
-    g_escType = 0;
-    if (ESC_ReadRegister(ESC_REG_TYPE, (uint8_t *)&g_escType) != HAL_OK)
-    {
-        g_escType = 0xFF;       /* 通信失败标记 */
-    }
-
-    /* 读 ESC Version (0x0001) */
-    g_escVer = 0;
-    if (ESC_ReadRegister(ESC_REG_REVISION, (uint8_t *)&g_escVer) != HAL_OK)
-    {
-        g_escVer = 0xFF;        /* 通信失败标记 */
-    }
-
-    /* IRQ 状态 */
-    ESC_GetIRQStatus(&irq0, &irq1);
-
-    __NOP();    /* 在这里设断点，Watch 窗口观察 g_escType / g_escVer */
-    (void)irq0;
-    (void)irq1;
-}
-
-/**
- * @brief  测试: 读写用户 RAM 区域
- * @note   写入测试数据到 0x1000 → 读回 → 比较
- *         g_escError == 0 表示通过
- */
-void ESC_TestReadWrite(void)
-{
-    #define TEST_SIZE   8
-    uint8_t txData[TEST_SIZE] = {0xA5, 0x5A, 0x01, 0x02, 0x03, 0x04, 0x55, 0xAA};
-    uint8_t rxData[TEST_SIZE];
-    uint8_t i;
-
-    g_escError = 0;
-
-    /* 写测试数据到 RAM (0x1000) */
-    if (ESC_WriteBlock(ESC_RAM_BASE, txData, TEST_SIZE) == HAL_OK)
-    {
-        HAL_Delay(1);
-
-        /* 读回 */
-        if (ESC_ReadBlock(ESC_RAM_BASE, rxData, TEST_SIZE) == HAL_OK)
-        {
-            for (i = 0; i < TEST_SIZE; i++)
-            {
-                if (rxData[i] != txData[i])
-                {
-                    g_escError++;
-                }
-            }
-        }
-        else
-        {
-            g_escError = 0xFF;      /* 读失败 */
-        }
-    }
-    else
-    {
-        g_escError = 0xFE;          /* 写失败 */
-    }
-
-    __NOP();    /* 断点: g_escError==0 表示读写正确 */
-}
-
-/**
- * @brief  诊断函数: 一次性读出 ESC 关键信息
- * @note   设断点在最后的 __NOP(), Watch 窗口观察所有变量
- *         覆盖: 身份/PDI 错误/SM0 配置/RAM 内容/读写测试
- */
-void ESC_Diagnose(void)
-{
-    /* ---- 基本信息 ---- */
-    volatile uint8_t type     = 0;    /* ESC Type */
-    volatile uint8_t rev      = 0;    /* ESC Revision */
-    volatile uint8_t fmmu     = 0;    /* FMMU 数量 */
-    volatile uint8_t sm       = 0;    /* SyncManager 数量 */
-    volatile uint8_t ramSize  = 0;    /* RAM 大小(KB) */
-
-    /* ---- PDI 错误诊断 ---- */
-    volatile uint8_t pdiErrCnt  = 0;  /* PDI 错误计数 */
-    volatile uint8_t pdiErrCode = 0;  /* 最后错误原因 */
-
-    /* ---- SM0 配置 (新结构体) ---- */
-    volatile ESC_SM_Config_t sm0Cfg = {0};
-
-    /* ---- 0x1000 处现有数据 ---- */
-    volatile uint8_t ram[8] = {0};    /* 原始数据 */
-
-    /* ---- 单字节读写测试 ---- */
-    volatile uint8_t testWr = 0xA5;
-    volatile uint8_t testRd = 0;
-
-    /* 读基本信息 */
-    ESC_ReadRegister(ESC_REG_TYPE,           (uint8_t *)&type);
-    ESC_ReadRegister(ESC_REG_REVISION,       (uint8_t *)&rev);
-    ESC_ReadRegister(ESC_REG_FMMU_SUPPORTED, (uint8_t *)&fmmu);
-    ESC_ReadRegister(ESC_REG_SM_SUPPORTED,   (uint8_t *)&sm);
-    ESC_ReadRegister(ESC_REG_RAM_SIZE,       (uint8_t *)&ramSize);
-
-    /* 读 PDI 错误计数 */
-    ESC_ReadRegister(ESC_REG_PDI_ERR_CNT,  (uint8_t *)&pdiErrCnt);
-    ESC_ReadRegister(ESC_REG_PDI_ERR_CODE, (uint8_t *)&pdiErrCode);
-
-    /* 读 SM0 配置 (使用新 SM 管理接口) */
-    ESC_SM_ReadConfig(0, (ESC_SM_Config_t *)&sm0Cfg);
-
-    /* 读 0x1000 处原始数据 */
-    ESC_ReadBlock(ESC_RAM_BASE, (uint8_t *)ram, 8);
-
-    /* 单字节写 0x1F00 然后读回 (远离 SM 区域的高地址) */
-    ESC_WriteRegister(0x1F00, 0xA5);
-    ESC_ReadRegister (0x1F00, (uint8_t *)&testRd);
-
-    __NOP();    /* 断点: 观察上面所有变量 */
-}
-
-/**
- * @brief  邮箱自测: SPI 写 SM0 数据区 → 读状态 → 读回数据
- * @note   设断点在最后的 __NOP(), 观察:
- *         sm0StsBefore=0x00(空), sm0StsAfter=0x08(满), match=8(数据一致)
- */
-void ESC_MbxSelfTest(void)
-{
-    volatile uint8_t sm0StsBefore = 0;
-    volatile uint8_t sm0StsAfter  = 0;
-    volatile uint8_t testData[8]  = {0xA5, 0x5A, 0x01, 0x02, 0x03, 0x04, 0x55, 0xAA};
-    volatile uint8_t readBack[8]  = {0};
-    volatile uint8_t match = 0;
-    uint8_t i;
-
-    /* 1. 读 SM0 当前状态 */
-    ESC_ReadRegister(0x0805, (uint8_t *)&sm0StsBefore);
-
-    /* 2. SPI 写测试数据到 SM0 物理区 (0x1000) */
-    ESC_WriteBlock(0x1000, (uint8_t *)testData, 8);
-
-    /* 3. 再读 SM0 状态 — 应看到 bit3=1 (邮箱满) */
-    ESC_ReadRegister(0x0805, (uint8_t *)&sm0StsAfter);
-
-    /* 4. 读回数据验证 */
-    ESC_ReadBlock(0x1000, (uint8_t *)readBack, 8);
-    for (i = 0; i < 8; i++) {
-        if (readBack[i] == testData[i]) match++;
-    }
-
-    __NOP();    /* 断点: sm0StsBefore/After >0 说明状态检测正常 */
-}
-
-/* ================================================================
- * §F  看门狗 / 过程数据
- * ================================================================ */
-
-/**
- * @brief  禁用 PDI/SM 看门狗, 防止开发阶段 ESC 异常复位
- * @note   PDI 看门狗 = 0 (禁用)
- *         SM 看门狗  = 0 (禁用)
- *         上电后立即调用一次即可
- */
 void ESC_Watchdog_Config(void)
 {
     /* 禁用 PDI 看门狗 (0x0410 = 0) */

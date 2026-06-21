@@ -65,16 +65,8 @@ void MX_SPI1_Init(void);
  *=============================================================== */
 
 /* 基础收发 (含 CS 控制) */
-HAL_StatusTypeDef SPI_WriteByte(uint8_t data);
-HAL_StatusTypeDef SPI_ReadByte(uint8_t *pData);
-HAL_StatusTypeDef SPI_WriteReadByte(uint8_t txData, uint8_t *pRxData);
-HAL_StatusTypeDef SPI_WriteBuffer(uint8_t *pData, uint16_t size);
-HAL_StatusTypeDef SPI_ReadBuffer(uint8_t *pData, uint16_t size);
-HAL_StatusTypeDef SPI_WriteReadBuffer(uint8_t *pTxData, uint8_t *pRxData, uint16_t size);
 
 /* 通用测试 */
-void SPI_LoopbackTest(void);       /* 自环回: 短接 MOSI/MISO 验证底层硬件 */
-void SPI_SendTestPattern(void);    /* 波形测试: 0x55/0xAA 交替, 示波器观察 */
 
 
 /* USER CODE END Prototypes */

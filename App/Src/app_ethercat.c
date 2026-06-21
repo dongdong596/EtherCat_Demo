@@ -38,7 +38,6 @@
 
 static uint8_t m_currentState = ESC_STATE_INIT;  /* 当前 EtherCAT 状态 */
 static uint16_t m_alError    = 0;                /* AL Status Code */
-static uint8_t m_skipConfigValidation = 0;
 
 /* Watch 调试变量: 状态机和邮箱 SM 配置 */
 #if ECAT_DIAG_ENABLE
@@ -376,7 +375,7 @@ static void OnLeaveState(uint8_t oldState)
  * ================================================================ */
 
 /**
- * @brief  执行状态跳转 (可被 ECAT_MainTask / ECAT_SelfTest 复用)
+ * @brief  执行状态跳转
  * @param  requestedState: 目标状态
  * @param  ackBit: AL Control bit4 — 主站状态切换确认标志
  *         主站握手协议: ACK=1 时从站须在 AL Status 设 Response 位 (bit4) 回应
@@ -414,7 +413,6 @@ static uint8_t _ECAT_DoTransition(uint8_t requestedState, uint8_t ackBit)
     }
 
     /* 执行切换 */
-    if (!m_skipConfigValidation)
     {
         uint16_t cfgError = ValidateTransitionConfig(m_currentState, requestedState);
         if (cfgError != AL_STATUS_NO_ERROR)
@@ -549,43 +547,6 @@ void ECAT_DiagReadSM(void)
         ESC_SM_ReadConfig(3, &sm3);
         PublishSMProcessDiag(&sm2, &sm3);
     }
-}
-
-uint8_t ECAT_SelfTest(void)
-{
-    uint8_t errors = 0;
-    uint8_t state;
-    uint8_t i;
-
-    static const uint8_t testSeq[] = {
-        ESC_STATE_PREOP,
-        ESC_STATE_SAFEOP,
-        ESC_STATE_OP,
-        ESC_STATE_SAFEOP,
-        ESC_STATE_PREOP,
-        ESC_STATE_INIT,
-    };
-
-    ECAT_Init();
-    if (ECAT_GetState() != ESC_STATE_INIT) return 0xFF;
-
-    m_skipConfigValidation = 1U;
-
-    for (i = 0; i < sizeof(testSeq); i++)
-    {
-        _ECAT_DoTransition(testSeq[i], 0x10);
-
-        state = ECAT_GetState();
-        if (state != testSeq[i]) errors |= (1 << i);
-
-        uint8_t hwState = 0;
-        ESC_ReadRegister(ESC_REG_AL_STATUS, &hwState);
-        if ((hwState & 0x0F) != testSeq[i]) errors |= (1 << (i + 8));
-    }
-
-    m_skipConfigValidation = 0U;
-    ECAT_Init();
-    return errors;
 }
 
 /* ================================================================

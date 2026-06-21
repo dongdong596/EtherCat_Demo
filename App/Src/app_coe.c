@@ -911,7 +911,3 @@ uint8_t CoE_MainTask(void)
     return 1;  /* 处理了一次请求 */
 }
 
-uint16_t CoE_GetODSize(void)
-{
-    return OD_SIZE;
-}

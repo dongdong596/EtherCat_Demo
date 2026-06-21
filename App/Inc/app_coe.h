@@ -231,7 +231,6 @@ uint8_t CoE_MainTask(void);
  * @brief  获取对象字典条目数
  * @retval 对象字典总条目数
  */
-uint16_t CoE_GetODSize(void);
 
 #ifdef __cplusplus
 }

@@ -25,7 +25,6 @@
   *
   *  开发进度:
   *    ✅ 第2步: ESC 单寄存器/块读写
-  *    ✅ 第3步: ESC 完整信息读取 (AX58100_ReadESCInfo)
   *    ✅ 第4步: 状态机
   *    ✅ 第5步: SyncManager 配置
   *    ✅ 第6步: CoE 邮箱协议 / CoE Online
@@ -289,30 +288,9 @@ HAL_StatusTypeDef ESC_WriteRegister(uint16_t addr, uint8_t data);
 HAL_StatusTypeDef ESC_ReadBlock(uint16_t addr, uint8_t *pData, uint16_t size);
 HAL_StatusTypeDef ESC_WriteBlock(uint16_t addr, uint8_t *pData, uint16_t size);
 
-/* ── IRQ 状态 (每次 SPI 事务自动捕获到全局变量) ── */
-void ESC_GetIRQStatus(uint8_t *irq0, uint8_t *irq1);
-
 /* ================================================================
  * §8  API: SyncManager 管理
- *
- *     使用流程:
- *       自测:  ESC_SM_Init()              — 一键配好 SM0~SM3 默认值
- *       回读:  ESC_SM_ReadConfig(n, &cfg) — 读回寄存器实际值
- *       单配:  ESC_SM_Config(n, &cfg)     — 逐通道自定义
- *
- *     注意:  有主站时, SM 配置由主站在 PreOp 阶段通过网线写入,
- *            MCU 侧不需要调用这些函数.
  * ================================================================ */
-
-/**
- * @brief  用默认布局初始化 SM0~SM3 (无主站自测用)
- * @note   一键写入 SM0/SM1/SM2/SM3 的起始地址/长度/控制/激活
- *         SM0: 邮箱 M→S,  0x1000, 128B
- *         SM1: 邮箱 S→M,  0x1080, 128B
- *         SM2: 缓冲 M→S,  0x1100,  32B
- *         SM3: 缓冲 S→M,  0x1120,  32B
- */
-void ESC_SM_Init(void);
 
 /**
  * @brief  读取单个 SM 通道的完整配置
@@ -321,45 +299,6 @@ void ESC_SM_Init(void);
  */
 void ESC_SM_ReadConfig(uint8_t smIdx, ESC_SM_Config_t *pCfg);
 
-/**
- * @brief  写入单个 SM 通道的配置
- * @param  smIdx: SM 索引 (0~7)
- * @param  pCfg:  要写入的配置 (activate 非 0 时激活通道)
- */
-void ESC_SM_Config(uint8_t smIdx, const ESC_SM_Config_t *pCfg);
-
-/* ── 向后兼容 ── */
-void ESC_ReadSMConfig(uint8_t smIdx, uint16_t *pStartAddr, uint16_t *pLength,
-                      uint8_t *pControl, uint8_t *pStatus);
-void ESC_WriteSMConfig(uint8_t smIdx, uint16_t startAddr, uint16_t length,
-                       uint8_t control, uint8_t activate);
-
-/* ================================================================
- * §9  API: ESC 完整信息
- * ================================================================ */
-
-/**
- * @brief  读 ESC 完整设备信息
- * @note   一次调用读齐所有身份/能力寄存器, 结果存入 g_escInfo
- *         仅需 5 次 SPI 事务 (2 次块读 + 3 次单读)
- * @retval HAL_OK / HAL_ERROR
- */
-HAL_StatusTypeDef AX58100_ReadESCInfo(void);
-
-/* ================================================================
- * §10 API: 测试 / 诊断
- * ================================================================ */
-
-void ESC_TestReadID(void);         /* 读 ESC 类型/版本, 验证通信         */
-void ESC_TestReadWrite(void);      /* 读写用户 RAM 区域, 验证 PDI 功能   */
-void ESC_Diagnose(void);           /* 诊断: 一口气读关键寄存器            */
-void ESC_MbxSelfTest(void);        /* 邮箱自测: 写SM0→读状态→读回      */
-
-/* ================================================================
- * §11 API: 看门狗 / 过程数据
- * ================================================================ */
-
-void AX58100_WriteIdentity(void);        /* 写固定身份到 ESC (无 EEPROM)    */
 void ESC_Watchdog_Config(void);         /* 禁用 PDI/SM 看门狗             */
 
 /**

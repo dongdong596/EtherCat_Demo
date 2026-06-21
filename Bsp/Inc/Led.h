@@ -8,7 +8,6 @@ extern "C" {
 #include <stdint.h>
 
 void BSP_LED_WriteMask(uint16_t mask);
-uint16_t BSP_LED_GetMask(void);
 
 #ifdef __cplusplus
 }
