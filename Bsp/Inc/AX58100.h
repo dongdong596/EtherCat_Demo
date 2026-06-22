@@ -261,7 +261,7 @@ typedef struct {
 
 /** @brief SyncManager 单通道配置
  *
- *  对应 ESC 寄存器 SMn (0x0800 + n*0x10) 的前 8 字节.
+ *  对应 ESC 寄存器 SMn (0x0800 + n*0x08) 的完整 8 字节.
  *  status 字段为只读, 仅在 ESC_SM_ReadConfig 时回填.
  */
 typedef struct {
